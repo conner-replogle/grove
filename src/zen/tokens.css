@@ -1,0 +1,62 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Design tokens from Zen Browser (src/zen/common/styles/zen-theme.css,
+ * zen-workspaces.css, vertical-tabs.css), resolved for a Chromium WebUI.
+ * Set on :host of webui-browser-app; they inherit into Grove's sidebar. */
+:host {
+  color-scheme: light dark;
+  --zen-primary-color: #7c8cf8;
+  --zen-branding-bg: light-dark(#e2e2e2, #101010);
+  --zen-branding-bg-reverse: light-dark(#101010, #e2e2e2);
+  --toolbox-textcolor: light-dark(rgba(0, 0, 0, 0.9), rgba(255, 255, 255, 0.9));
+
+  --zen-toolbar-element-bg: light-dark(
+    color-mix(in oklch, var(--toolbox-textcolor) 8%, transparent),
+    color-mix(in oklch, var(--toolbox-textcolor) 15%, transparent));
+  --zen-toolbar-element-bg-hover: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1));
+  --toolbarbutton-background-color-hover: color-mix(in srgb, var(--zen-branding-bg-reverse) 7%, transparent);
+  --toolbarbutton-background-color-active: color-mix(in srgb, var(--zen-branding-bg-reverse) 10%, transparent);
+  --tab-background-color-hover: var(--toolbarbutton-background-color-hover);
+  --tab-background-color-selected: light-dark(
+    color-mix(in srgb, rgba(255, 255, 255, 0.8) 98%, var(--zen-primary-color)),
+    color-mix(in srgb, rgba(255, 255, 255, 0.18) 95%, var(--zen-primary-color)));
+  --tab-box-shadow-selected: 0 0.8px 1.5px 0 light-dark(rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.05));
+  --zen-colors-primary: light-dark(
+    color-mix(in srgb, var(--zen-primary-color) 50%, black 50%),
+    color-mix(in srgb, var(--zen-primary-color) 20%, var(--zen-branding-bg) 80%));
+  --zen-sidebar-themed-icon-fill: light-dark(
+    color-mix(in srgb, var(--zen-primary-color) 50%, black),
+    color-mix(in srgb, var(--zen-colors-primary) 15%, #ebebeb));
+  --zen-main-browser-background: light-dark(#e9e9e9, #131313);
+  --zen-big-shadow: rgba(0, 0, 0, 0.24) 0px 3px 8px;
+  --divider-color: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+
+  --zen-squircle-value: 1.3;
+  --sep: 8px;
+  --toolbox-pad: 5px;
+  --sidebar-w: 186px;
+  --radius-medium: 14px;
+  --radius-button: 8px;
+  --tab-h: 36px;
+  --essential-h: 46px;
+  --indicator-h: 44px;
+  --card-radius: 8px;
+}
+@supports (color: AccentColor) {
+  :host { --zen-primary-color: AccentColor; }
+}
+
+/* Folder colors (zen-folders.css:15-17), per folder via --folder-accent. */
+.folder {
+  --zen-folder-behind-bgcolor: light-dark(
+    color-mix(in srgb, var(--folder-accent) 60%, gray),
+    color-mix(in srgb, var(--folder-accent) 60%, #c1c1c1));
+  --zen-folder-front-bgcolor: light-dark(
+    color-mix(in srgb, var(--folder-accent), white 70%),
+    color-mix(in srgb, var(--folder-accent), black 40%));
+  --zen-folder-stroke: light-dark(
+    color-mix(in srgb, var(--folder-accent) 50%, black),
+    color-mix(in srgb, var(--folder-accent) 15%, #ebebeb));
+}

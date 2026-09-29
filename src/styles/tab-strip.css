@@ -1,3 +1,0 @@
-#tabstrip { flex-direction: column !important; align-items: stretch !important; margin: 4px 8px !important; gap: 2px; -webkit-app-region: no-drag !important; }
-webui-browser-tab { width: auto !important; max-width: none !important; transform: none !important; }
-#newTabButton { order: -1; align-self: flex-start; }

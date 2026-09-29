@@ -1,13 +1,259 @@
-:host { display: flex; flex-direction: column; gap: 4px; padding: 0 8px; color: #e8e8ee; font: 13px system-ui, sans-serif; user-select: none; }
-.essentials { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 6px; }
-.essential { height: 44px; display: grid; place-items: center; border-radius: 10px; background: rgba(255,255,255,.08); }
-.essential.selected { background: rgba(255,255,255,.2); }
-.workspace-indicator { display: flex; gap: 8px; align-items: center; height: 36px; padding: 0 8px; color: #aaa; font-weight: 600; }
-.new-tab, .tab, .folder-header { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px; border-radius: 8px; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
-.tab:hover, .new-tab:hover, .folder-header:hover { background: rgba(255,255,255,.06); }
-.tab.selected { background: rgba(255,255,255,.14); }
-.label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.favicon { width: 16px; height: 16px; flex: none; }
-.close { border: 0; background: none; color: inherit; opacity: 0; }
-.tab:hover .close, .tab.selected .close { opacity: .7; }
-.folder-tabs { padding-left: 14px; }
+/* Grove's tab list in Zen's style. Tokens come from ../zen/tokens.css
+ * (inherited from webui-browser-app). */
+
+:host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--toolbox-textcolor);
+  font: 13px system-ui, sans-serif;
+  user-select: none;
+}
+* { corner-shape: superellipse(var(--zen-squircle-value)); }
+button { font: inherit; color: inherit; border: 0; background: none; padding: 0; }
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, currentColor 35%, transparent) transparent;
+}
+
+/* ---- Essentials: pinned tabs as a tile grid ---- */
+
+.essentials {
+  display: grid;
+  gap: 4px;
+  padding: 6px 0 2px;
+  grid-template-columns: repeat(auto-fit, minmax(max(23.7%, 50px), 1fr));
+}
+.essentials[data-count='2'],
+.essentials[data-count='4'] {
+  grid-template-columns: repeat(auto-fit, minmax(max(23%, 50px), 1fr) minmax(max(23%, 50px), 1fr));
+}
+.essentials[data-count='6'],
+.essentials[data-count='9'] { grid-template-columns: repeat(auto-fit, minmax(max(30%, 50px), auto)); }
+.essentials[data-count='5'] { grid-template-columns: repeat(auto-fit, minmax(max(25%, 48px), 1fr)); }
+
+.essential {
+  position: relative;
+  height: var(--essential-h);
+  margin-block: 2px;
+  border-radius: var(--radius-medium);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--zen-toolbar-element-bg);
+  transition: scale 0.1s ease;
+}
+.essential:hover { background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.2)); }
+.essential:active { scale: 0.985; }
+.essential .favicon { z-index: 1; margin: 0; }
+.essential.selected { background: transparent; }
+/* The selected tile glows with its own favicon, blurred behind a plate. */
+.essential.selected::after {
+  content: '';
+  position: absolute;
+  inset: -50%;
+  z-index: -1;
+  filter: blur(20px);
+  background: var(--favicon) center / contain no-repeat;
+}
+.essential.selected::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: 2px;
+  border-radius: 12px;
+  z-index: 0;
+  background: light-dark(rgba(255, 255, 255, 0.85), rgba(68, 64, 64, 0.85));
+  transition: background 0.1s ease-in-out;
+}
+.essential.selected:hover::before { background: light-dark(rgba(255, 255, 255, 0.8), rgba(68, 64, 64, 0.75)); }
+
+/* ---- Workspace indicator ---- */
+
+.workspace-indicator {
+  position: relative;
+  height: var(--indicator-h);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px 0 11px;
+}
+.workspace-indicator::before {
+  content: '';
+  position: absolute;
+  inset: 4px 5.5px 4px 2px;
+  border-radius: var(--radius-medium);
+  pointer-events: none;
+}
+.workspace-indicator:hover::before { background: var(--tab-background-color-hover); }
+.workspace-indicator .icon { width: 16px; height: 16px; display: grid; place-items: center; color: var(--zen-sidebar-themed-icon-fill); }
+.workspace-indicator .name {
+  flex: 1;
+  font-size: small;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
+.workspace-indicator .actions {
+  width: 26px;
+  height: 26px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.workspace-indicator:hover .actions { opacity: 1; }
+.workspace-indicator .actions:hover { background: var(--tab-background-color-hover); }
+
+/* ---- Tab rows (and rows that look like them) ---- */
+
+.tab,
+.new-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: var(--tab-h);
+  margin: 2px;
+  padding: 0 8px;
+  border-radius: var(--radius-medium);
+  transition: scale 0.1s ease, margin-inline-start 0.1s ease-in-out;
+}
+.tab:hover,
+.new-tab:hover { background: var(--tab-background-color-hover); }
+.tab.selected {
+  background: var(--tab-background-color-selected);
+  box-shadow: var(--tab-box-shadow-selected);
+}
+.tab:active,
+.new-tab:active { scale: 0.985; }
+.new-tab {
+  width: calc(100% - 4px);
+  justify-content: flex-start;
+  text-align: start;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
+
+.favicon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 4px;
+  margin: 0 10px 0 3.33px;
+  object-fit: contain;
+}
+.favicon.blank {
+  background: color-mix(in srgb, var(--zen-primary-color) 80%, light-dark(#000, #fff));
+  opacity: 0.5;
+}
+.favicon.icon { display: grid; place-items: center; }
+.tab .favicon:active { scale: 0.97; }
+
+.label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 1.7;
+  /* Fade long titles out instead of an ellipsis. */
+  mask-image: linear-gradient(to left, transparent, black 1em);
+}
+
+.close {
+  display: none;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border-radius: var(--radius-button);
+  flex: none;
+  place-items: center;
+}
+.tab:hover .close { display: grid; }
+.close:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.close:active { background: color-mix(in srgb, currentColor 20%, transparent); }
+
+/* ---- Folders (Chrome tab groups) ---- */
+
+.folder-header {
+  position: relative;
+  height: 40px;
+  margin-left: 2px;
+  padding-inline: 4px 8px;
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+}
+.folder-header::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: var(--radius-medium);
+  z-index: -1;
+}
+.folder-header:hover::before { background: var(--tab-background-color-hover); }
+.folder.has-selected > .folder-header::before { background: var(--zen-toolbar-element-bg-hover); }
+.folder-icon {
+  position: absolute;
+  left: 5px;
+  width: 28px;
+  height: 28px;
+  pointer-events: none;
+}
+.folder-icon svg { filter: contrast(125%); translate: -1px -1px; overflow: visible; }
+.folder-icon :is(path, rect, g) {
+  transform-origin: 0 0;
+  transition: transform 0.3s cubic-bezier(0.42, 0, 0, 1), opacity 0.3s cubic-bezier(0.42, 0, 0, 1);
+}
+.folder:not(.collapsed) .folder-icon .back { transform: skewX(16deg) translate(-4px, 2px) scale(0.85); }
+.folder:not(.collapsed) .folder-icon :is(.front, .dots) { transform: skewX(-16deg) translate(8px, 2px) scale(0.85); }
+.folder-icon .dots { opacity: 0; }
+.folder.collapsed.has-selected .folder-icon .dots { opacity: 1; }
+.folder-header .label { padding-left: 32px; mask-image: none; text-overflow: ellipsis; }
+.folder-tabs > * { margin-inline-start: 14px; }
+
+/* ---- Sidebar foot: workspace switcher ---- */
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding-top: 4px;
+}
+.foot .tbtn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-button);
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
+.foot .tbtn:hover { background: var(--toolbarbutton-background-color-hover); }
+.workspace-switcher {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: 0.5ch;
+}
+.workspace-switcher button {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-button);
+  display: grid;
+  place-items: center;
+  filter: grayscale(1);
+  opacity: 0.7;
+  transition: filter 0.2s, opacity 0.2s;
+}
+.workspace-switcher button:hover { filter: none; opacity: 1; background: var(--zen-toolbar-element-bg); }
+.workspace-switcher button.active { filter: none; opacity: 1; color: var(--zen-sidebar-themed-icon-fill); }

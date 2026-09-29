@@ -62,6 +62,10 @@ interface Observation {
 
 export interface TabsApi {
   service: TabStripService
+  // A new connection, for one mutating call. Replies to mutations are
+  // unreliable in Chromium 154 (moveNode's never arrives, and an error reply
+  // can close the pipe), so each change gets its own and nobody waits on it.
+  fresh(): TabStripService
   observe(observer: TabStripObserver, handle: unknown): Observation
 }
 
@@ -74,6 +78,7 @@ export function tabsApi(): Promise<TabsApi> {
     const service = svc.TabStripService.getRemote() as TabStripService
     return {
       service,
+      fresh: () => svc.TabStripService.getRemote() as TabStripService,
       observe(observer: TabStripObserver, handle: unknown) {
         const o = new obs.TabStripObservation(observer) as Observation
         o.bind(handle)

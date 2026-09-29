@@ -2,8 +2,8 @@
 // before its own scripts run. It restyles and extends Webium's components;
 // the tabs underneath are real Chrome tabs.
 import appCss from './styles/app.css'
-import tabCss from './styles/tab.css'
-import tabStripCss from './styles/tab-strip.css'
+import zenTokens from './zen/tokens.css'
+import searchboxCss from './styles/searchbox.css'
 import { addStyles, patchMethod } from './patch'
 import './sidebar'
 
@@ -16,9 +16,8 @@ declare global {
 if (!window.__grove) {
   window.__grove = { version: 1 }
 
-  addStyles('webui-browser-app', appCss)
-  addStyles('webui-browser-tab-strip', tabStripCss)
-  addStyles('webui-browser-tab', tabCss)
+  addStyles('webui-browser-app', zenTokens + appCss)
+  addStyles('webui-browser-searchbox', searchboxCss)
 
   // Grove's sidebar takes the tab strip's place. Webium's strip stays in
   // the page (hidden) because the app listens to its tab events.

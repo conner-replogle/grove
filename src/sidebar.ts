@@ -3,7 +3,11 @@
 // are the tab list. Webium's own tab strip stays in the page, hidden, so the
 // rest of Webium (omnibox, content region) keeps getting its events.
 import sidebarCss from './styles/sidebar.css'
-import { faviconUrl, tabsApi, type Container, type GroupData, type NodeId, type Tab } from './tabs-api'
+import zenTokens from './zen/tokens.css'
+import folderSvg from './zen/folder-icon.svg'
+import { icons } from './icons'
+import { svg } from './svg'
+import { faviconUrl, tabsApi, type Container, type GroupData, type NodeId, type Tab, type TabStripService } from './tabs-api'
 
 type Item =
   | { kind: 'tab'; tab: Tab }
@@ -50,13 +54,14 @@ function toModel(root: Container): Model {
 
 class GroveSidebar extends HTMLElement {
   private model: Model = { pinned: [], items: [] }
-  private refreshQueued = false
+  private refreshing = false
+  private dirty = false
   private readonly root = this.attachShadow({ mode: 'open' })
   private contextMenu?: (id: NodeId, x: number, y: number) => void
 
   async connectedCallback(): Promise<void> {
     const sheet = new CSSStyleSheet()
-    sheet.replaceSync(sidebarCss)
+    sheet.replaceSync(zenTokens + sidebarCss)
     this.root.adoptedStyleSheets = [sheet]
 
     const api = await tabsApi()
@@ -84,16 +89,27 @@ class GroveSidebar extends HTMLElement {
     this.contextMenu = (id, x, y) => controller.showTabContextMenu(id, { x, y })
   }
 
+  // Re-reads the whole tree after structural changes. Events that arrive
+  // while a read is in flight trigger one more read, so none are lost.
+  // (A timer, not requestAnimationFrame: rAF stops in hidden windows.)
   private queueRefresh(): void {
-    if (this.refreshQueued) return
-    this.refreshQueued = true
-    requestAnimationFrame(async () => {
-      this.refreshQueued = false
-      const { service } = await tabsApi()
-      const snapshot = await service.getTabs()
-      this.model = toModel(snapshot.tabStrip)
-      this.render()
-    })
+    this.dirty = true
+    if (this.refreshing) return
+    this.refreshing = true
+    setTimeout(async () => {
+      try {
+        while (this.dirty) {
+          this.dirty = false
+          const { fresh } = await tabsApi()
+          const snapshot = await withTimeout(fresh().getTabs(), 2000)
+          if (!snapshot) continue
+          this.model = toModel(snapshot.tabStrip)
+          this.render()
+        }
+      } finally {
+        this.refreshing = false
+      }
+    }, 16)
   }
 
   private updateTab(tab: Tab): void {
@@ -105,43 +121,53 @@ class GroveSidebar extends HTMLElement {
     this.render()
   }
 
-  private async act(fn: (s: Awaited<ReturnType<typeof tabsApi>>['service']) => Promise<unknown>): Promise<void> {
-    const { service } = await tabsApi()
-    await fn(service).catch((e: unknown) => console.error('[grove]', e))
+  // Sends one change to the browser; see TabsApi.fresh for why it doesn't wait.
+  private async act(fn: (s: TabStripService) => Promise<unknown>): Promise<void> {
+    const { fresh } = await tabsApi()
+    fn(fresh()).catch((e: unknown) => console.error('[grove]', e))
   }
 
   private render(): void {
     const { pinned, items } = this.model
-    const frag = document.createDocumentFragment()
+    const scroll = el('div', 'scroll')
 
     if (pinned.length) {
       const grid = el('div', 'essentials')
+      grid.dataset.count = String(pinned.length)
       for (const tab of pinned) grid.append(this.essential(tab))
-      frag.append(grid)
+      scroll.append(grid)
     }
 
-    const header = el('div', 'workspace-indicator')
-    header.append(el('span', 'workspace-icon', '🌿'), el('span', 'workspace-name', 'Home'))
-    frag.append(header)
+    const indicator = el('div', 'workspace-indicator')
+    indicator.append(iconEl('icon', icons.leaf), el('span', 'name', 'Home'), iconEl('actions', icons.ellipsis))
+    scroll.append(indicator)
 
     const newTab = el('button', 'new-tab')
-    newTab.append(el('span', 'new-tab-plus', '+'), el('span', 'label', 'New Tab'))
+    newTab.append(iconEl('favicon icon', icons.plus), el('span', 'label', 'New Tab'))
     newTab.addEventListener('click', () => this.act((s) => s.createTabAt(null, null)))
-    frag.append(newTab)
+    scroll.append(newTab)
 
-    const list = el('div', 'tabs')
-    for (const item of items) {
-      if (item.kind === 'tab') list.append(this.tabRow(item.tab))
-      else list.append(this.folder(item))
-    }
-    frag.append(list)
+    for (const item of items) scroll.append(item.kind === 'tab' ? this.tabRow(item.tab) : this.folder(item))
 
-    this.root.replaceChildren(frag)
+    const foot = el('div', 'foot')
+    const switcher = el('div', 'workspace-switcher')
+    const home = el('button', 'active')
+    home.title = 'Home'
+    home.append(svg(icons.leaf))
+    switcher.append(home)
+    const add = el('button', 'tbtn')
+    add.title = 'New workspace'
+    add.append(svg(icons.plus))
+    foot.append(el('span', 'tbtn-spacer'), switcher, add)
+
+    this.root.replaceChildren(scroll, foot)
   }
 
   private essential(tab: Tab): HTMLElement {
     const tile = el('div', `essential${tab.isActive ? ' selected' : ''}`)
     tile.title = tab.title
+    const url = faviconUrl(tab)
+    if (url) tile.style.setProperty('--favicon', `url("${url}")`)
     tile.append(favicon(tab))
     this.wireTab(tile, tab)
     return tile
@@ -151,7 +177,8 @@ class GroveSidebar extends HTMLElement {
     const row = el('div', `tab${tab.isActive ? ' selected' : ''}`)
     row.title = `${tab.title}\n${urlString(tab.url)}`
     row.append(favicon(tab), el('span', 'label', tab.title || urlString(tab.url) || 'New Tab'))
-    const close = el('button', 'close', '×')
+    const close = el('button', 'close')
+    close.append(svg(icons.x))
     close.title = 'Close tab'
     close.addEventListener('mousedown', (e) => e.stopPropagation())
     close.addEventListener('click', (e) => {
@@ -164,15 +191,16 @@ class GroveSidebar extends HTMLElement {
   }
 
   private folder(group: Extract<Item, { kind: 'group' }>): HTMLElement {
-    const box = el('div', `folder${group.data.isCollapsed ? ' collapsed' : ''}`)
-    box.style.setProperty('--folder-color', GROUP_COLORS[group.data.color] ?? GROUP_COLORS[0])
+    const hasSelected = group.tabs.some((t) => t.isActive)
+    const box = el('div', `folder${group.data.isCollapsed ? ' collapsed' : ''}${hasSelected ? ' has-selected' : ''}`)
+    box.style.setProperty('--folder-accent', GROUP_COLORS[group.data.color] ?? GROUP_COLORS[0])
     const head = el('div', 'folder-header')
-    head.append(folderIcon(), el('span', 'label', group.data.title || 'Folder'))
+    head.append(iconEl('folder-icon', folderSvg), el('span', 'label', group.data.title || 'Folder'))
     head.addEventListener('click', () =>
       this.act((s) =>
-        s.update({ tabGroup: { id: group.id, data: { ...group.data, isCollapsed: !group.data.isCollapsed } } }, [
-          'is_collapsed'
-        ])
+        // The update mask only knows title and color; no mask replaces the
+        // whole visual data, which is how the collapsed flag changes.
+        s.update({ tabGroup: { id: group.id, data: { ...group.data, isCollapsed: !group.data.isCollapsed } } }, null)
       )
     )
     box.append(head)
@@ -199,6 +227,10 @@ class GroveSidebar extends HTMLElement {
   }
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  return Promise.race([p, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms))])
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
   node.className = cls
@@ -216,10 +248,9 @@ function favicon(tab: Tab): HTMLElement {
   return img
 }
 
-function folderIcon(): HTMLElement {
-  const span = el('span', 'folder-icon')
-  span.innerHTML =
-    '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1.5 4.5a1.5 1.5 0 0 1 1.5-1.5h3l1.5 1.5h5.5a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1-1.5 1.5H3a1.5 1.5 0 0 1-1.5-1.5z" fill="var(--folder-color)" /></svg>'
+function iconEl(cls: string, markup: string): HTMLElement {
+  const span = el('span', cls)
+  span.append(svg(markup))
   return span
 }
 

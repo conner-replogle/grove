@@ -74,7 +74,7 @@ cdp.on('Target.attachedToTarget', async ({ sessionId, targetInfo, waitingForDebu
 cdp.on('Runtime.consoleAPICalled', ({ type, args }, sessionId) => {
   if (!sessions.has(sessionId)) return
   const text = args.map((a) => a.value ?? a.description ?? a.type).join(' ')
-  if (text.startsWith('[grove]') || type === 'error') console.log('[ui]', type, text)
+  if (text.startsWith('[grove]') || type === 'error' || type === 'debug') console.log('[ui]', type, text)
 })
 cdp.on('Runtime.exceptionThrown', ({ exceptionDetails: d }, sessionId) => {
   if (sessions.has(sessionId)) console.log('[ui] exception', d.exception?.description ?? d.text)

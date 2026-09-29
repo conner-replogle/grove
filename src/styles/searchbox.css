@@ -1,0 +1,10 @@
+/* Webium's address field, flattened into Zen's sidebar URL bar: the
+ * rounded box around it (in app.css) is the only background. */
+#inputWrapper {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+:host {
+  --cr-searchbox-height: 34px;
+  --cr-searchbox-font-size: 13px;
+}
