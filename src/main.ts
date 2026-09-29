@@ -5,6 +5,7 @@ import appCss from './styles/app.css'
 import tabCss from './styles/tab.css'
 import tabStripCss from './styles/tab-strip.css'
 import { addStyles, patchMethod } from './patch'
+import './sidebar'
 
 declare global {
   interface Window {
@@ -18,6 +19,10 @@ if (!window.__grove) {
   addStyles('webui-browser-app', appCss)
   addStyles('webui-browser-tab-strip', tabStripCss)
   addStyles('webui-browser-tab', tabCss)
+
+  // Grove's sidebar takes the tab strip's place. Webium's strip stays in
+  // the page (hidden) because the app listens to its tab events.
+  keepSidebarMounted()
 
   // Webium routes every mousedown in the tab strip into its drag code,
   // which assumes a horizontal strip (and, fed vertical positions, can ask
@@ -40,4 +45,25 @@ if (!window.__grove) {
       .find((n) => n instanceof Element && n.tagName === 'WEBUI-BROWSER-TAB-STRIP') as unknown as TabStrip
     if (tab && strip) strip.activateTab(tab.tabData.id)
   })
+}
+
+// Puts <grove-sidebar> in the tab strip's slot as soon as Webium's app has
+// rendered it, and again if a re-render ever drops it.
+function keepSidebarMounted(): void {
+  const mount = (): boolean => {
+    const root = document.querySelector('webui-browser-app')?.shadowRoot
+    const slot = root?.querySelector('.tabstripDiv')
+    if (!root || !slot) return false
+    if (!slot.querySelector('grove-sidebar')) slot.append(document.createElement('grove-sidebar'))
+    return true
+  }
+  const wait = (): void => {
+    if (!mount()) {
+      requestAnimationFrame(wait)
+      return
+    }
+    const root = document.querySelector('webui-browser-app')!.shadowRoot!
+    new MutationObserver(() => mount()).observe(root, { childList: true, subtree: true })
+  }
+  wait()
 }

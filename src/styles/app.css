@@ -11,3 +11,5 @@
 .captionButtonsDiv { display: none !important; }
 #searchBar { flex-wrap: wrap; order: 1; background: transparent !important; padding: 8px; }
 #addressBox { flex-basis: 100%; order: 10; margin-top: 6px; }
+webui-browser-tab-strip { display: none !important; }
+.tabstripDiv { display: block; width: 100%; }

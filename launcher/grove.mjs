@@ -49,6 +49,7 @@ const sessions = new Map()
 
 async function inject(sessionId, { waiting }) {
   await cdp.send('Page.enable', {}, sessionId)
+  if (dev) await cdp.send('Runtime.enable', {}, sessionId)
   const { identifier } = await cdp.send(
     'Page.addScriptToEvaluateOnNewDocument',
     { source: bundle, runImmediately: true },
@@ -68,6 +69,15 @@ cdp.on('Target.attachedToTarget', async ({ sessionId, targetInfo, waitingForDebu
   } else if (waitingForDebugger) {
     await cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(() => {})
   }
+})
+// In --dev, the UI's console output and uncaught errors land in this log.
+cdp.on('Runtime.consoleAPICalled', ({ type, args }, sessionId) => {
+  if (!sessions.has(sessionId)) return
+  const text = args.map((a) => a.value ?? a.description ?? a.type).join(' ')
+  if (text.startsWith('[grove]') || type === 'error') console.log('[ui]', type, text)
+})
+cdp.on('Runtime.exceptionThrown', ({ exceptionDetails: d }, sessionId) => {
+  if (sessions.has(sessionId)) console.log('[ui] exception', d.exception?.description ?? d.text)
 })
 cdp.on('Target.detachedFromTarget', ({ sessionId }) => sessions.delete(sessionId))
 
@@ -98,6 +108,26 @@ async function reload(sessionId) {
 }
 
 if (dev) {
+  // Dev-only: evaluate JS in the windows' UI from a shell, over a socket
+  // only this user can open:
+  //   curl --unix-socket $XDG_RUNTIME_DIR/grove-ui-dev.sock -d '<js>' http://ui/eval
+  const { createServer } = await import('node:http')
+  const { rmSync } = await import('node:fs')
+  const socket = `${process.env.XDG_RUNTIME_DIR ?? '/tmp'}/grove-ui-dev.sock`
+  rmSync(socket, { force: true })
+  createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    const out = []
+    for (const sessionId of sessions.keys()) {
+      const r = await cdp
+        .send('Runtime.evaluate', { expression: body, returnByValue: true, awaitPromise: true }, sessionId)
+        .catch((e) => ({ error: e.message }))
+      out.push(r.error ?? r.exceptionDetails?.exception?.description ?? r.result?.value ?? r.result?.description)
+    }
+    res.end(JSON.stringify(out, null, 1) + '\n')
+  }).listen(socket)
+
   const esbuild = await import('esbuild')
   const { options } = await import('../build.mjs')
   const ctx = await esbuild.context({
