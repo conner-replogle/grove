@@ -1,0 +1,13 @@
+/* Window layout: sidebar on the left, the page as a floating card. */
+#rootContainer {
+  grid-template-rows: 1fr !important;
+  grid-template-columns: 260px 1fr !important;
+  background: #1b1b1f !important;
+}
+#topContainer { grid-row: 1 !important; grid-column: 1; overflow: hidden; display: flex; flex-direction: column; }
+#main { grid-row: 1 !important; grid-column: 2; background: transparent !important; margin: 8px 8px 8px 0; border-radius: 10px; overflow: hidden; }
+.titlebarDiv { flex-direction: column; align-items: stretch; height: auto !important; order: 2; background: transparent !important; }
+.tabstripDiv { margin-left: 0 !important; }
+.captionButtonsDiv { display: none !important; }
+#searchBar { flex-wrap: wrap; order: 1; background: transparent !important; padding: 8px; }
+#addressBox { flex-basis: 100%; order: 10; margin-top: 6px; }
