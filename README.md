@@ -29,3 +29,27 @@ Grove Chromium fork, whose own workspace service fights this one) and
 
 Chrome's own modules (`//resources/...`, `/tab_strip_api/...`) are not
 bundled; the UI loads them from the binary at runtime.
+
+## Sync
+
+Grove syncs its whole workspace model between devices: workspaces, the
+Essentials, every tab and folder, each workspace's active tab and the last
+workspace used. At launch, a device picks up where you were on another one
+(unless you've already started doing something). Each field merges
+last-writer-wins by hybrid logical clock stamp, and order uses fractional
+keys, so two devices' edits merge cleanly. See `host/sync/`.
+
+It's end-to-end encrypted: the server (`sync-worker/`, a Cloudflare Worker
+with one Durable Object per account) only stores sealed change batches and
+hands them on; devices do all merging. One secret gives each device the
+account id, the server token and the AES-GCM key.
+
+```sh
+cd sync-worker && pnpm install && pnpm run deploy   # once: your own sync server
+grove sync setup https://grove-ui-sync.<you>.workers.dev
+grove sync join <url> <secret>                      # on each other device
+grove sync status
+```
+
+Set `ACCOUNTS` (comma-separated account ids, from `grove sync status`) on
+the Worker to turn away anyone else.

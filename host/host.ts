@@ -90,6 +90,11 @@ export class GroveHost {
   // Permission requests waiting for an answer, oldest first. A window shows
   // the first one its visible tab made.
   private permissions: { id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }[] = []
+  // Whether the user has done anything yet this launch (see resume).
+  private userActed = false
+
+  // Told of every change the host makes to the model (sync records them).
+  onModelChange?: () => void
 
   private readonly store: Store
   private readonly ui: UiSink
@@ -338,6 +343,7 @@ export class GroveHost {
 
   async command(windowId: number, c: HostCommand): Promise<void> {
     const b = this.bindWindow(windowId)
+    if (c.type !== 'hello') this.userActed = true
     switch (c.type) {
       case 'hello':
         this.uiReady.add(windowId)
@@ -660,6 +666,71 @@ export class GroveHost {
     this.model = next
     this.store.save(next)
     this.queuePush()
+    this.onModelChange?.()
+  }
+
+  // ---- Sync ----
+
+  get current(): Model {
+    return this.model
+  }
+
+  isLive(entryId: string): boolean {
+    return this.tabOf.has(entryId)
+  }
+
+  // Takes a model with other devices' changes merged in, and brings the
+  // windows and Chrome's tabs in line: pages of entries closed elsewhere
+  // close, entries moved to another workspace settle, and windows on a
+  // workspace that's gone (deleted elsewhere, or merged into the synced one
+  // of the same name when this device joined) move on. Windows showing an
+  // entry keep showing it.
+  async applySynced(next: Model, remap: ReadonlyMap<string, string>): Promise<void> {
+    const prev = this.model
+    const idsOf = (m: Model) => new Set([...m.essentials, ...m.workspaces.flatMap((w) => w.entries)].map((e) => e.id))
+    const kept = idsOf(next)
+    const gone = [...idsOf(prev)].filter((id) => !kept.has(id))
+    const moved = [...kept].filter((id) => {
+      const was = M.findEntry(prev, id)
+      return was && was.workspace?.id !== M.findEntry(next, id)!.workspace?.id
+    })
+    this.model = next
+    this.store.save(next)
+    const rebound: number[] = []
+    for (const [windowId, b] of this.windows) {
+      if (next.workspaces.some((w) => w.id === b.workspaceId)) continue
+      const to = remap.get(b.workspaceId)
+      b.workspaceId = to && next.workspaces.some((w) => w.id === to) ? to : next.lastActiveWorkspaceId
+      if (b.activeEntryId && !this.shows(b, b.activeEntryId)) b.activeEntryId = undefined
+      rebound.push(windowId)
+    }
+    this.pushAll()
+    if (!this.bridge) return
+    await this.started()
+    await this.closeEntriesEverywhere(gone)
+    for (const id of moved) await this.settle(id)
+    for (const windowId of rebound) if (!this.windows.get(windowId)?.activeEntryId) await this.showActive(windowId)
+    this.pushAll()
+  }
+
+  // Once sync has caught up at launch, if the user was last on another
+  // device: unless they've started on something here, the first window
+  // goes to the workspace and tab they were on there.
+  async resume(workspaceId: string, entryId: string | undefined): Promise<void> {
+    if (this.userActed || !this.bridge) return
+    await this.started()
+    const windowId = [...this.windows.keys()][0]
+    const b = windowId === undefined ? undefined : this.windows.get(windowId)
+    if (!b || this.userActed || !this.model.workspaces.some((w) => w.id === workspaceId)) return
+    this.log('resuming where the user was on another device')
+    await this.switchWorkspace(windowId, workspaceId)
+    if (entryId && entryId !== b.activeEntryId && this.shows(b, entryId)) await this.activateIn(windowId, entryId)
+  }
+
+  // Until the windows open at launch show their workspaces: their tabs
+  // mustn't change while Webium's UI is still loading.
+  private async started(): Promise<void> {
+    for (let i = 0; i < 100 && this.startup.size; i++) await new Promise((r) => setTimeout(r, 200))
   }
 
   flush(): void {

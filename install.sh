@@ -25,6 +25,7 @@ mkdir -p "$(dirname "$bin")"
 cat > "$bin" <<SH
 #!/usr/bin/env bash
 # Grove (grove-ui, installed from $(pwd) by install.sh).
+if [ "\${1:-}" = sync ]; then exec "$node" "$dest/launcher/grove.mjs" "\$@"; fi
 log="\${XDG_CACHE_HOME:-\$HOME/.cache}/grove/grove.log"
 mkdir -p "\$(dirname "\$log")"
 exec "$node" "$dest/launcher/grove.mjs" "\$@" >>"\$log" 2>&1

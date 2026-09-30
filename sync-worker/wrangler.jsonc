@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "grove-ui-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-26",
+  "durable_objects": {
+    "bindings": [{ "name": "SYNC", "class_name": "SyncRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncRoom"] }],
+  // Only these accounts (ids from `grove sync status`) may use this server.
+  "vars": { "ACCOUNTS": "e657ecb0f11ad6778e6b905836b4061a" },
+  "observability": { "enabled": true }
+}

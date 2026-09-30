@@ -12,6 +12,10 @@
 //
 // --dev rebuilds src/ on save, reloads the windows' UI and logs to stdout.
 //
+//   node launcher/grove.mjs sync ...
+//
+// sets up syncing with other devices (see sync-cli.mjs).
+//
 //   GROVE_CHROME   the browser binary     (default: the system chromium; any
 //                  Chromium 152+ with Webium works, e.g. ungoogled-chromium.
 //                  Not the Grove Chromium fork: its own C++ workspace service
@@ -26,6 +30,8 @@ import { fileURLToPath } from 'node:url'
 import { GroveHost } from '../host/host.ts'
 import { SitePermissions } from '../host/site-permissions.ts'
 import { Store } from '../host/store.ts'
+import { SyncClient } from '../host/sync/client.ts'
+import { readSyncConfig, statePath } from '../host/sync/config.ts'
 import { UI_BINDING, UI_RECEIVER } from '../shared/protocol.ts'
 import { PipeCDP } from './cdp.mjs'
 
@@ -55,6 +61,16 @@ function runningPid() {
   } catch {
     return undefined
   }
+}
+if (process.argv[2] === 'sync') {
+  const { syncCli } = await import('./sync-cli.mjs')
+  try {
+    await syncCli(PROFILE, process.argv.slice(3), !!runningPid())
+  } catch (e) {
+    console.error(`grove sync: ${e.message}`)
+    process.exit(1)
+  }
+  process.exit(0)
 }
 if (runningPid()) {
   const handoff = spawn(CHROME, [`--user-data-dir=${PROFILE}`, ...passArgs], { stdio: 'ignore' })
@@ -136,6 +152,7 @@ const chrome = spawn(
 )
 chrome.on('exit', (code) => {
   host.flush()
+  sync?.flush()
   process.exit(code ?? 0)
 })
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => chrome.kill('SIGTERM'))
@@ -178,6 +195,24 @@ const host = new GroveHost(
   log,
   sitePermissions
 )
+
+// Sync with Grove on other devices, if set up (grove sync setup). It starts
+// once the host has Chrome's windows.
+const syncConfig = readSyncConfig(PROFILE)
+const sync =
+  syncConfig &&
+  new SyncClient({
+    statePath: statePath(PROFILE),
+    config: syncConfig,
+    host: {
+      model: () => host.current,
+      isLive: (id) => host.isLive(id),
+      apply: (model, remap) => host.applySynced(model, remap),
+      resume: (workspaceId, entryId) => host.resume(workspaceId, entryId)
+    },
+    log: (...a) => console.log('[grove]', ...a)
+  })
+if (sync) host.onModelChange = () => sync.localChanged()
 
 // DevTools can't say which window a chrome://webui-browser page belongs to
 // (Browser.getWindowForTarget: "Browser window not found"), but the page's
@@ -259,6 +294,7 @@ async function attachBridge(sessionId, waiting) {
   if (!hostAttached) {
     hostAttached = true
     await host.attach(bridge)
+    sync?.start().catch((e) => console.log('[grove] sync:', e.message))
   }
   await bridge.call('ready')
 }

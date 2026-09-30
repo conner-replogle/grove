@@ -1,0 +1,16 @@
+{
+  "name": "grove-sync-worker",
+  "private": true,
+  "type": "module",
+  "description": "Grove's sync server: an end-to-end encrypted log per account on a Cloudflare Durable Object",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260929.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.143.1"
+  }
+}
