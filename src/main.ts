@@ -5,6 +5,7 @@ import appCss from './styles/app.css'
 import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
 import { addStyles, patchMethod } from './patch'
+import { anchorExtensionsMenu } from './extensions-anchor'
 import { sidebarResizer } from './resize'
 import './sidebar'
 
@@ -52,6 +53,7 @@ if (!window.__grove) {
 // and again if a re-render ever drops them.
 function keepSidebarMounted(): void {
   let resizer: HTMLElement | undefined
+  const anchored = new WeakSet<Element>()
   const mount = (): boolean => {
     const app = document.querySelector<HTMLElement>('webui-browser-app')
     const root = app?.shadowRoot
@@ -65,6 +67,11 @@ function keepSidebarMounted(): void {
     const box = root.querySelector('#addressBox')
     const extensions = root.querySelector('#extensionsBar')
     if (box && extensions && extensions.parentNode !== box) box.append(extensions)
+    const menuButton = extensions?.shadowRoot?.querySelector<HTMLElement>('#extensionsMenuButton')
+    if (menuButton && !anchored.has(menuButton)) {
+      anchored.add(menuButton)
+      void anchorExtensionsMenu(menuButton)
+    }
     return true
   }
   const wait = (): void => {
