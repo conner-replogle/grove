@@ -77,7 +77,7 @@
 /* Zen's floating URL bar: while the address box has focus it lifts out of
  * the sidebar and floats over the page, wide enough for its suggestions,
  * with everything behind it dimmed. The sidebar keeps its slot. */
-#addressBox:focus-within {
+#addressBox:has(#address:focus-within) {
   position: fixed;
   z-index: 1000;
   top: 16vh;
@@ -90,13 +90,13 @@
   box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
   border-radius: 14px;
 }
-#addressBox:focus-within:hover { background: transparent; }
-#addressBox:focus-within #address {
+#addressBox:has(#address:focus-within):hover { background: transparent; }
+#addressBox:has(#address:focus-within) #address {
   --cr-searchbox-height: 44px;
   --cr-searchbox-font-size: 15px;
 }
-#addressBox:focus-within #locationIconButton { top: 8.5px !important; left: 8px !important; }
-#searchBar:has(#addressBox:focus-within)::after {
+#addressBox:has(#address:focus-within) #locationIconButton { top: 8.5px !important; left: 8px !important; }
+#searchBar:has(#address:focus-within)::after {
   content: '';
   order: 10;
   flex-basis: 100%;
@@ -113,7 +113,7 @@
   --cr-icon-button-size: 26px;
   --cr-icon-button-icon-size: 15px;
 }
-#addressBox:focus-within #extensionsBar { display: none; }
+#addressBox:has(#address:focus-within) #extensionsBar { display: none; }
 
 #locationIconButton {
   left: 4px !important;
