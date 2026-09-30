@@ -7,10 +7,13 @@
     "build": "node build.mjs",
     "dev": "node launcher/grove.mjs --dev",
     "start": "node build.mjs && node launcher/grove.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "@types/node": "^26.6.3",
     "esbuild": "^0.28.2",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
   }
 }

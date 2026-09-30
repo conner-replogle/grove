@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Grove bridge",
+  "description": "Lets Grove's host move and manage tabs across windows. Loaded by the Grove launcher.",
+  "version": "0.1.0",
+  "permissions": ["tabs"],
+  "background": { "service_worker": "grove-bridge.js" }
+}

@@ -15,9 +15,10 @@ pnpm dev            # launch Grove with this UI; rebuilds and reloads on save
 pnpm start          # the same without watching
 ```
 
-`GROVE_CHROME` picks the browser binary (default `~/.local/opt/grove/chrome`,
-Chromium 154 or later) and `GROVE_PROFILE` the profile (default
-`~/.config/grove-webium`).
+`GROVE_CHROME` picks the browser binary (default the system `chromium`; any
+Chromium 152 or later with Webium works, e.g. ungoogled-chromium, but not the
+Grove Chromium fork, whose own workspace service fights this one) and
+`GROVE_PROFILE` the profile (default `~/.config/grove-webium`).
 
 ## Layout
 

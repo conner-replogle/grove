@@ -1,234 +1,195 @@
-// <grove-sidebar>: Grove's tab list, drawn from Chrome's Tab Strip API.
-// Pinned tabs are the Essentials grid, tab groups are folders, and the rest
-// are the tab list. Webium's own tab strip stays in the page, hidden, so the
-// rest of Webium (omnibox, content region) keeps getting its events.
-import sidebarCss from './styles/sidebar.css'
-import zenTokens from './zen/tokens.css'
-import folderSvg from './zen/folder-icon.svg'
+// <grove-sidebar>: the window's workspace, drawn from the Grove host's
+// shared model. Every window on a workspace shows the same entries; a click
+// asks the host to show that entry here, which moves its page over if it is
+// open in another window. Pinned entries are the Essentials grid; folders
+// are Grove's own (Chrome's tab groups only live inside one window).
+import type { EntryView, WindowState } from '../shared/protocol.ts'
+import type { Color, Group } from '../shared/types.ts'
+import { send, subscribe } from './host-client'
 import { icons } from './icons'
+import sidebarCss from './styles/sidebar.css'
 import { svg } from './svg'
-import { faviconUrl, tabsApi, type Container, type GroupData, type NodeId, type Tab, type TabStripService } from './tabs-api'
+import folderSvg from './zen/folder-icon.svg'
+import zenTokens from './zen/tokens.css'
 
-type Item =
-  | { kind: 'tab'; tab: Tab }
-  | { kind: 'group'; id: NodeId; data: GroupData; tabs: Tab[] }
-
-interface Model {
-  pinnedId?: NodeId
-  unpinnedId?: NodeId
-  pinned: Tab[]
-  items: Item[]
+const COLOR_HEX: Record<Color, string> = {
+  green: '#4caf6e',
+  blue: '#4a8fe0',
+  purple: '#9a6ce0',
+  pink: '#e06ca8',
+  red: '#e05a5a',
+  orange: '#e8914a',
+  yellow: '#d6b43c',
+  gray: '#8e8e93'
 }
 
-const urlString = (u: unknown): string =>
-  typeof u === 'string' ? u : ((u as { url?: string } | undefined)?.url ?? '')
-
-// Chrome's tab group colors (tab_groups.mojom.Color), as Zen-like tints.
-const GROUP_COLORS = ['#8e8e93', '#4a8fe0', '#e05a5a', '#d6b43c', '#4caf6e', '#e06ca8', '#9a6ce0', '#4fb8c8', '#e8914a']
-
-function toModel(root: Container): Model {
-  const model: Model = { pinned: [], items: [] }
-  const walk = (c: Container): void => {
-    const d = c.data
-    if (d.pinnedTabs) {
-      model.pinnedId = d.pinnedTabs.id
-      for (const child of c.children) if (child.data.tab) model.pinned.push(child.data.tab)
-      return
-    }
-    if (d.unpinnedTabs) {
-      model.unpinnedId = d.unpinnedTabs.id
-      for (const child of c.children) {
-        if (child.data.tab) model.items.push({ kind: 'tab', tab: child.data.tab })
-        else if (child.data.tabGroup) {
-          const tabs = child.children.flatMap((g) => (g.data.tab ? [g.data.tab] : []))
-          model.items.push({ kind: 'group', id: child.data.tabGroup.id, data: child.data.tabGroup.data, tabs })
-        }
-      }
-      return
-    }
-    c.children.forEach(walk)
-  }
-  walk(root)
-  return model
-}
+const faviconFor = (url: string): string =>
+  `chrome://favicon2/?size=16&scaleFactor=1x&allowGoogleServerFallback=0&pageUrl=${encodeURIComponent(url)}`
 
 class GroveSidebar extends HTMLElement {
-  private model: Model = { pinned: [], items: [] }
-  private refreshing = false
-  private dirty = false
   private readonly root = this.attachShadow({ mode: 'open' })
-  private contextMenu?: (id: NodeId, x: number, y: number) => void
+  private state?: WindowState
+  private menu?: HTMLElement
 
-  async connectedCallback(): Promise<void> {
+  connectedCallback(): void {
     const sheet = new CSSStyleSheet()
     sheet.replaceSync(zenTokens + sidebarCss)
     this.root.adoptedStyleSheets = [sheet]
-
-    const api = await tabsApi()
-    const snapshot = await api.service.getTabs()
-    this.model = toModel(snapshot.tabStrip)
-    this.render()
-
-    const refresh = (): void => this.queueRefresh()
-    api.observe(
-      {
-        onTabsCreated: refresh,
-        onNodesClosed: refresh,
-        onNodeMoved: refresh,
-        onCollectionCreated: refresh,
-        onDataChanged: (e) => {
-          if (e.tab) this.updateTab(e.tab.data)
-          else refresh()
-        }
-      },
-      snapshot.stream.handle
-    )
-
-    const ui = await import('/tab_strip_api/tab_strip_ui_controller.mojom-webui.js')
-    const controller = ui.TabStripUIController.getRemote()
-    this.contextMenu = (id, x, y) => controller.showTabContextMenu(id, { x, y })
-  }
-
-  // Re-reads the whole tree after structural changes. Events that arrive
-  // while a read is in flight trigger one more read, so none are lost.
-  // (A timer, not requestAnimationFrame: rAF stops in hidden windows.)
-  private queueRefresh(): void {
-    this.dirty = true
-    if (this.refreshing) return
-    this.refreshing = true
-    setTimeout(async () => {
-      try {
-        while (this.dirty) {
-          this.dirty = false
-          const { fresh } = await tabsApi()
-          const snapshot = await withTimeout(fresh().getTabs(), 2000)
-          if (!snapshot) continue
-          this.model = toModel(snapshot.tabStrip)
-          this.render()
-        }
-      } finally {
-        this.refreshing = false
-      }
-    }, 16)
-  }
-
-  private updateTab(tab: Tab): void {
-    const replace = (t: Tab): Tab => (t.id === tab.id ? tab : t)
-    this.model.pinned = this.model.pinned.map(replace)
-    this.model.items = this.model.items.map((it) =>
-      it.kind === 'tab' ? { ...it, tab: replace(it.tab) } : { ...it, tabs: it.tabs.map(replace) }
-    )
-    this.render()
-  }
-
-  // Sends one change to the browser; see TabsApi.fresh for why it doesn't wait.
-  private async act(fn: (s: TabStripService) => Promise<unknown>): Promise<void> {
-    const { fresh } = await tabsApi()
-    fn(fresh()).catch((e: unknown) => console.error('[grove]', e))
+    subscribe((s) => {
+      this.state = s
+      this.render()
+    })
+    document.addEventListener('mousedown', () => this.closeMenu(), true)
   }
 
   private render(): void {
-    const { pinned, items } = this.model
+    const s = this.state
+    if (!s) return
+    const ws = s.workspace
     const scroll = el('div', 'scroll')
 
+    const pinned = ws.entries.filter((e) => e.pinned)
     if (pinned.length) {
       const grid = el('div', 'essentials')
       grid.dataset.count = String(pinned.length)
-      for (const tab of pinned) grid.append(this.essential(tab))
+      for (const e of pinned) grid.append(this.essential(e, s))
       scroll.append(grid)
     }
 
     const indicator = el('div', 'workspace-indicator')
-    indicator.append(iconEl('icon', icons.leaf), el('span', 'name', 'Home'), iconEl('actions', icons.ellipsis))
+    indicator.style.setProperty('--ws-color', COLOR_HEX[ws.color])
+    indicator.append(iconEl('icon', icons.leaf), el('span', 'name', ws.name))
     scroll.append(indicator)
 
     const newTab = el('button', 'new-tab')
     newTab.append(iconEl('favicon icon', icons.plus), el('span', 'label', 'New Tab'))
-    newTab.addEventListener('click', () => this.act((s) => s.createTabAt(null, null)))
+    newTab.addEventListener('click', () => send({ type: 'newTab' }))
     scroll.append(newTab)
 
-    for (const item of items) scroll.append(item.kind === 'tab' ? this.tabRow(item.tab) : this.folder(item))
+    const unpinned = ws.entries.filter((e) => !e.pinned)
+    const seen = new Set<string>()
+    for (const e of unpinned) {
+      if (!e.groupId) scroll.append(this.tabRow(e, s))
+      else if (!seen.has(e.groupId)) {
+        seen.add(e.groupId)
+        const group = ws.groups.find((g) => g.id === e.groupId)
+        if (group) scroll.append(this.folder(group, unpinned.filter((x) => x.groupId === e.groupId), s))
+      }
+    }
 
-    const foot = el('div', 'foot')
-    const switcher = el('div', 'workspace-switcher')
-    const home = el('button', 'active')
-    home.title = 'Home'
-    home.append(svg(icons.leaf))
-    switcher.append(home)
-    const add = el('button', 'tbtn')
-    add.title = 'New workspace'
-    add.append(svg(icons.plus))
-    foot.append(el('span', 'tbtn-spacer'), switcher, add)
-
-    this.root.replaceChildren(scroll, foot)
+    this.root.replaceChildren(scroll, this.foot(s))
+    if (this.menu) this.root.append(this.menu)
   }
 
-  private essential(tab: Tab): HTMLElement {
-    const tile = el('div', `essential${tab.isActive ? ' selected' : ''}`)
-    tile.title = tab.title
-    const url = faviconUrl(tab)
-    if (url) tile.style.setProperty('--favicon', `url("${url}")`)
-    tile.append(favicon(tab))
-    this.wireTab(tile, tab)
+  private essential(e: EntryView, s: WindowState): HTMLElement {
+    const tile = el('div', `essential${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}`)
+    tile.title = e.title
+    tile.style.setProperty('--favicon', `url("${faviconFor(e.url)}")`)
+    tile.append(favicon(e))
+    this.wire(tile, e)
     return tile
   }
 
-  private tabRow(tab: Tab): HTMLElement {
-    const row = el('div', `tab${tab.isActive ? ' selected' : ''}`)
-    row.title = `${tab.title}\n${urlString(tab.url)}`
-    row.append(favicon(tab), el('span', 'label', tab.title || urlString(tab.url) || 'New Tab'))
+  private tabRow(e: EntryView, s: WindowState): HTMLElement {
+    const row = el('div', `tab${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}`)
+    row.title = `${e.title}\n${e.url}`
+    row.append(favicon(e), el('span', 'label', e.title || e.url || 'New Tab'))
     const close = el('button', 'close')
-    close.append(svg(icons.x))
     close.title = 'Close tab'
-    close.addEventListener('mousedown', (e) => e.stopPropagation())
-    close.addEventListener('click', (e) => {
-      e.stopPropagation()
-      void this.act((s) => s.closeNodes([tab.id]))
+    close.append(svg(icons.x))
+    close.addEventListener('mousedown', (ev) => ev.stopPropagation())
+    close.addEventListener('click', (ev) => {
+      ev.stopPropagation()
+      send({ type: 'close', entryId: e.id })
     })
     row.append(close)
-    this.wireTab(row, tab)
+    this.wire(row, e)
     return row
   }
 
-  private folder(group: Extract<Item, { kind: 'group' }>): HTMLElement {
-    const hasSelected = group.tabs.some((t) => t.isActive)
-    const box = el('div', `folder${group.data.isCollapsed ? ' collapsed' : ''}${hasSelected ? ' has-selected' : ''}`)
-    box.style.setProperty('--folder-accent', GROUP_COLORS[group.data.color] ?? GROUP_COLORS[0])
+  private folder(group: Group, members: EntryView[], s: WindowState): HTMLElement {
+    const hasSelected = members.some((m) => m.id === s.activeEntryId)
+    const box = el('div', `folder${group.collapsed ? ' collapsed' : ''}${hasSelected ? ' has-selected' : ''}`)
+    box.style.setProperty('--folder-accent', COLOR_HEX[group.color])
     const head = el('div', 'folder-header')
-    head.append(iconEl('folder-icon', folderSvg), el('span', 'label', group.data.title || 'Folder'))
-    head.addEventListener('click', () =>
-      this.act((s) =>
-        // The update mask only knows title and color; no mask replaces the
-        // whole visual data, which is how the collapsed flag changes.
-        s.update({ tabGroup: { id: group.id, data: { ...group.data, isCollapsed: !group.data.isCollapsed } } }, null)
-      )
-    )
+    head.append(iconEl('folder-icon', folderSvg), el('span', 'label', group.title || 'Folder'))
+    head.addEventListener('click', () => send({ type: 'toggleFolder', groupId: group.id }))
+    head.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault()
+      this.openMenu(ev, [['Ungroup', () => send({ type: 'ungroup', groupId: group.id })]])
+    })
     box.append(head)
-    const shown = group.data.isCollapsed ? group.tabs.filter((t) => t.isActive) : group.tabs
+    const shown = group.collapsed ? members.filter((m) => m.id === s.activeEntryId) : members
     if (shown.length) {
       const children = el('div', 'folder-tabs')
-      for (const tab of shown) children.append(this.tabRow(tab))
+      for (const m of shown) children.append(this.tabRow(m, s))
       box.append(children)
     }
     return box
   }
 
-  private wireTab(node: HTMLElement, tab: Tab): void {
-    node.addEventListener('mousedown', (e) => {
-      if (e.button === 0) void this.act((s) => s.activateTab(tab.id))
+  private foot(s: WindowState): HTMLElement {
+    const foot = el('div', 'foot')
+    const switcher = el('div', 'workspace-switcher')
+    for (const w of s.workspaces) {
+      const b = el('button', w.id === s.workspace.id ? 'active' : '')
+      b.title = w.name
+      b.style.color = w.id === s.workspace.id ? COLOR_HEX[w.color] : ''
+      b.append(svg(icons.leaf))
+      b.addEventListener('click', () => send({ type: 'switchWorkspace', workspaceId: w.id }))
+      switcher.append(b)
+    }
+    const add = el('button', 'tbtn')
+    add.title = 'New workspace'
+    add.append(svg(icons.plus))
+    add.addEventListener('click', () => send({ type: 'newWorkspace' }))
+    foot.append(el('span', 'tbtn-spacer'), switcher, add)
+    return foot
+  }
+
+  private wire(node: HTMLElement, e: EntryView): void {
+    node.addEventListener('mousedown', (ev) => {
+      if (ev.button === 0) send({ type: 'activate', entryId: e.id })
     })
-    node.addEventListener('auxclick', (e) => {
-      if (e.button === 1) void this.act((s) => s.closeNodes([tab.id]))
+    node.addEventListener('auxclick', (ev) => {
+      if (ev.button === 1) send({ type: 'close', entryId: e.id })
     })
-    node.addEventListener('contextmenu', (e) => {
-      e.preventDefault()
-      this.contextMenu?.(tab.id, e.screenX, e.screenY)
+    node.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault()
+      this.openMenu(ev, [
+        [e.pinned ? 'Unpin' : 'Pin', () => send({ type: 'setPinned', entryId: e.id, pinned: !e.pinned })],
+        ['Add to new folder', () => send({ type: 'newFolder', entryId: e.id })],
+        ['Close', () => send({ type: 'close', entryId: e.id })]
+      ])
     })
   }
-}
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
-  return Promise.race([p, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms))])
+  // A small Grove menu for Grove's own model (pins and folders are shared
+  // across windows, so Chrome's per-window tab menu can't manage them).
+  private openMenu(ev: MouseEvent, items: [string, () => void][]): void {
+    this.closeMenu()
+    const menu = el('div', 'menu')
+    for (const [label, run] of items) {
+      const item = el('button', 'menu-item', label)
+      item.addEventListener('mousedown', (e) => e.stopPropagation())
+      item.addEventListener('click', () => {
+        this.closeMenu()
+        run()
+      })
+      menu.append(item)
+    }
+    const box = this.getBoundingClientRect()
+    menu.style.left = `${Math.max(0, Math.min(ev.clientX - box.left, box.width - 170))}px`
+    menu.style.top = `${ev.clientY - box.top}px`
+    menu.addEventListener('mousedown', (e) => e.stopPropagation())
+    this.menu = menu
+    this.root.append(menu)
+  }
+
+  private closeMenu(): void {
+    this.menu?.remove()
+    this.menu = undefined
+  }
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
@@ -238,20 +199,19 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: s
   return node
 }
 
-function favicon(tab: Tab): HTMLElement {
-  const url = faviconUrl(tab)
-  if (tab.networkState === 1 || tab.networkState === 2) return el('span', 'favicon loading')
-  if (!url) return el('span', 'favicon blank')
-  const img = el('img', 'favicon')
-  img.src = url
-  img.alt = ''
-  return img
-}
-
 function iconEl(cls: string, markup: string): HTMLElement {
   const span = el('span', cls)
   span.append(svg(markup))
   return span
+}
+
+function favicon(e: EntryView): HTMLElement {
+  if (e.loading) return el('span', 'favicon loading')
+  if (!e.url || e.url.startsWith('chrome://newtab')) return iconEl('favicon icon', icons.plus)
+  const img = el('img', 'favicon')
+  img.src = faviconFor(e.url)
+  img.alt = ''
+  return img
 }
 
 customElements.define('grove-sidebar', GroveSidebar)

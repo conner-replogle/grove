@@ -1,0 +1,68 @@
+// The canonical workspace model from docs/design/shared-tabs-and-workspaces.md
+// (conner-replogle/grove), as stored in the profile's grove-workspaces.json.
+// Ported from the Electron prototype (grove-electron).
+
+export const COLORS = [
+  'green',
+  'blue',
+  'purple',
+  'pink',
+  'red',
+  'orange',
+  'yellow',
+  'gray'
+] as const
+export type Color = (typeof COLORS)[number]
+
+// One page of a tab's back/forward list, as Electron's
+// navigationHistory.getAllEntries() returns it.
+export interface HistoryEntry {
+  url: string
+  title: string
+  pageState?: string
+}
+
+export interface Entry {
+  id: string
+  url: string
+  title: string
+  favicon?: string
+  pinned: boolean
+  groupId?: string
+  // Back/forward list for restoring a frozen tab; empty until it has loaded.
+  history: HistoryEntry[]
+  historyIndex: number
+  lastActive: number
+}
+
+// A folder of tabs. Its entries sit next to each other in the tab order.
+export interface Group {
+  id: string
+  title: string
+  color: Color
+  collapsed: boolean
+}
+
+export interface Workspace {
+  id: string
+  name: string
+  color: Color
+  // Tab order: pinned entries first, then the rest.
+  entries: Entry[]
+  groups: Group[]
+  activeEntryId?: string
+}
+
+export interface Model {
+  version: 1
+  workspaces: Workspace[]
+  lastActiveWorkspaceId: string
+}
+
+// Where a dragged entry lands: an index among the other entries, plus the
+// section and folder it joins.
+export interface MoveTarget {
+  index: number
+  pinned: boolean
+  groupId?: string
+}
