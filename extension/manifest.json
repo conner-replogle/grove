@@ -1,9 +1,41 @@
 {
   "manifest_version": 3,
   "name": "Grove bridge",
-  "description": "Lets Grove's host move and manage tabs across windows. Loaded by the Grove launcher.",
+  "description": "Lets Grove's host move and manage tabs across windows, and ask for sites' permissions. Loaded by the Grove launcher.",
   "version": "0.1.0",
-  "permissions": ["tabs"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "grove-bridge.js" }
+  "permissions": [
+    "tabs",
+    "contentSettings"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "grove-bridge.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "permissions-main.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "permissions-relay.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ]
 }

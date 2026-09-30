@@ -4,9 +4,10 @@
 // an entry's page lives in at most one window. Selecting an entry that is
 // open in another window moves the live page here (settled decision 1);
 // workspaces no window shows keep no pages (decision 2).
-import type { EntryView, HostCommand, WindowState } from '../shared/protocol.ts'
+import type { EntryView, HostCommand, PermissionDecision, PermissionKind, WindowState } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import * as M from './model.ts'
+import { keptByHost, type SitePermissions } from './site-permissions.ts'
 import type { Store } from './store.ts'
 
 export interface BridgeTab {
@@ -30,6 +31,7 @@ export type BridgeEvent =
   | { type: 'tabAttached'; tabId: number; windowId: number }
   | { type: 'windowCreated'; windowId: number }
   | { type: 'windowRemoved'; windowId: number }
+  | { type: 'permissionRequest'; id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }
 
 export interface Bridge {
   call<T = unknown>(fn: string, arg?: unknown): Promise<T>
@@ -50,6 +52,13 @@ interface Binding {
 }
 
 const NEW_TAB_URL = 'chrome://newtab/'
+const originOf = (url: string): string | undefined => {
+  try {
+    return new URL(url).origin
+  } catch {
+    return undefined
+  }
+}
 const isNewTabPage = (url: string): boolean => /^chrome:\/\/(newtab|new-tab-page)\/?$/.test(url)
 
 export class GroveHost {
@@ -78,15 +87,20 @@ export class GroveHost {
   // The last look of an entry a window gave up to another one (a JPEG data URL).
   private readonly snapshots = new Map<string, string>()
   private readonly uiReady = new Set<number>()
+  // Permission requests waiting for an answer, oldest first. A window shows
+  // the first one its visible tab made.
+  private permissions: { id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }[] = []
 
   private readonly store: Store
   private readonly ui: UiSink
   private readonly log: (...a: unknown[]) => void
+  private readonly sitePermissions?: SitePermissions
 
-  constructor(store: Store, ui: UiSink, log: (...a: unknown[]) => void = () => {}) {
+  constructor(store: Store, ui: UiSink, log: (...a: unknown[]) => void = () => {}, sitePermissions?: SitePermissions) {
     this.store = store
     this.ui = ui
     this.log = log
+    this.sitePermissions = sitePermissions
     this.model = store.load()
   }
 
@@ -151,6 +165,46 @@ export class GroveHost {
       case 'windowRemoved':
         this.windows.delete(e.windowId)
         return this.queuePush()
+      case 'permissionRequest':
+        this.permissions.push({ id: e.id, tabId: e.tabId, origin: e.origin, topOrigin: e.topOrigin, kinds: e.kinds })
+        return this.queuePush()
+    }
+  }
+
+  // Answers a permission request, and the same tab's other requests for
+  // the same site that this answer covers.
+  private answerPermission(id: string, decision: PermissionDecision): void {
+    const answered = this.permissions.find((p) => p.id === id)
+    if (!answered) return
+    const covered = this.permissions.filter(
+      (p) =>
+        p === answered ||
+        (decision !== 'dismiss' &&
+          p.tabId === answered.tabId &&
+          p.origin === answered.origin &&
+          p.kinds.every((k) => answered.kinds.includes(k)))
+    )
+    this.permissions = this.permissions.filter((p) => !covered.includes(p))
+    this.queuePush()
+    void (async () => {
+      // Kinds the host keeps are in place before the page's call goes on.
+      if (decision !== 'dismiss') {
+        const setting = decision === 'allow' ? 'granted' : 'denied'
+        for (const kind of answered.kinds.filter(keptByHost)) {
+          await this.sitePermissions?.set(answered.origin, kind, setting).catch((e: unknown) => this.log('permission', e))
+        }
+      }
+      for (const p of covered) await this.bridge?.call('answerPermission', { id: p.id, decision }).catch(() => {})
+    })()
+  }
+
+  // Drops a tab's requests that no longer apply: the tab closed, or left
+  // the site that asked.
+  private dropPermissions(tabId: number, url?: string): void {
+    for (const p of this.permissions) {
+      if (p.tabId !== tabId) continue
+      if (url !== undefined && originOf(url) === (p.topOrigin ?? p.origin)) continue
+      this.answerPermission(p.id, 'dismiss')
     }
   }
 
@@ -221,6 +275,7 @@ export class GroveHost {
     this.tabWindow.delete(tabId)
     this.placeholders.delete(tabId)
     this.stopLoading(tabId)
+    this.dropPermissions(tabId)
     const entryId = this.entryOf.get(tabId)
     if (entryId) this.unmap(entryId)
     if (this.closingByHost.delete(tabId) || !entryId) return this.queuePush()
@@ -235,6 +290,7 @@ export class GroveHost {
   private onTabUpdated(tab: BridgeTab): void {
     if (tab.status === 'loading') this.startLoading(tab.id)
     else this.stopLoading(tab.id)
+    if (tab.url) this.dropPermissions(tab.id, tab.url)
     const entryId = this.entryOf.get(tab.id)
     if (!entryId) return this.queuePush()
     this.update((m) =>
@@ -333,6 +389,8 @@ export class GroveHost {
       case 'editWorkspace':
         this.update((m) => M.editWorkspace(m, c.workspaceId, { name: c.name, color: c.color, icon: c.icon }))
         return
+      case 'answerPermission':
+        return this.answerPermission(c.id, c.decision)
       case 'deleteWorkspace':
         return this.deleteWorkspace(c.workspaceId)
     }
@@ -636,6 +694,13 @@ export class GroveHost {
     return { entryId, title: this.entry(entryId)?.title ?? '', snapshot: this.snapshots.get(entryId) }
   }
 
+  private permissionIn(windowId: number, b: Binding): WindowState['permission'] {
+    const tabId = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+    if (tabId === undefined || this.tabWindow.get(tabId) !== windowId) return undefined
+    const p = this.permissions.find((x) => x.tabId === tabId)
+    return p && { id: p.id, origin: p.origin, topOrigin: p.topOrigin, kinds: p.kinds }
+  }
+
   private view(windowId: number, b: Binding): WindowState {
     const ws = M.getWorkspace(this.model, b.workspaceId)
     const entryView = (e: Entry): EntryView => {
@@ -665,7 +730,8 @@ export class GroveHost {
       },
       essentials: this.model.essentials.map(entryView),
       activeEntryId: b.activeEntryId,
-      paused: this.pausedIn(windowId, b)
+      paused: this.pausedIn(windowId, b),
+      permission: this.permissionIn(windowId, b)
     }
   }
 }

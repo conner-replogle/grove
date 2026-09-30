@@ -9,6 +9,7 @@ import { addStyles, patchMethod } from './patch'
 import { showDomainOnly } from './address'
 import { anchorExtensionsBar } from './extensions-anchor'
 import { showPausedPages } from './paused'
+import { showPermissionPrompts } from './permission-prompt'
 import { sidebarResizer } from './resize'
 import { openUrlBarOnNewTab, releasePageFocus, watchUrlBarPlace } from './urlbar'
 import './sidebar'
@@ -32,7 +33,10 @@ if (!window.__grove) {
   // Grove's sidebar takes the tab strip's place. Webium's strip stays in
   // the page (hidden) because the app listens to its tab events.
   keepSidebarMounted()
-  showPausedPages(() => document.querySelector('webui-browser-app')?.shadowRoot?.querySelector<HTMLElement>('#main') ?? null)
+  const main = (): HTMLElement | null =>
+    document.querySelector('webui-browser-app')?.shadowRoot?.querySelector<HTMLElement>('#main') ?? null
+  showPausedPages(main)
+  showPermissionPrompts(main)
 
   // Webium routes every mousedown in the tab strip into its drag code,
   // which assumes a horizontal strip (and, fed vertical positions, can ask

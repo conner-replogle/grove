@@ -306,3 +306,81 @@ webui-browser-bookmark-bar { display: none !important; }
   background: var(--zen-primary-color);
   cursor: pointer;
 }
+
+/* ---- A site asking for a permission (permission-prompt.ts) ---- */
+
+.grove-permission {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 60;
+  width: 300px;
+  padding: 12px 14px 14px;
+  border-radius: 12px;
+  color: light-dark(#1f1f1f, #eeeeee);
+  background: light-dark(#ffffff, #242424);
+  border: 1px solid var(--divider-color);
+  box-shadow: var(--zen-big-shadow);
+  font-size: 13px;
+  animation: grove-permission-in 120ms ease-out;
+}
+@keyframes grove-permission-in {
+  from { opacity: 0; translate: 0 -6px; }
+}
+.grove-permission-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.grove-permission-site {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grove-permission-wants { flex: 1; white-space: nowrap; }
+.grove-permission-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -6px 0 0;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.grove-permission-close:hover { opacity: 1; background: var(--toolbarbutton-background-color-hover); }
+.grove-permission-list { display: grid; gap: 8px; margin-bottom: 14px; }
+.grove-permission-row { display: flex; align-items: center; gap: 10px; }
+.grove-permission-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--zen-primary-color);
+  background: color-mix(in srgb, var(--zen-primary-color) 14%, transparent);
+}
+.grove-permission-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.grove-permission-buttons button {
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.grove-permission-block {
+  color: inherit;
+  background: var(--zen-toolbar-element-bg);
+}
+.grove-permission-block:hover { background: var(--zen-toolbar-element-bg-hover); }
+.grove-permission-allow {
+  color: white;
+  background: var(--zen-primary-color);
+}
+.grove-permission-allow:hover { filter: brightness(1.08); }

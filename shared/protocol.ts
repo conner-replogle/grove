@@ -25,6 +25,37 @@ export interface WorkspaceSummary {
   icon?: string
 }
 
+// What a site can ask for through Grove's permission prompt. The first
+// five are kept as Chrome's site settings by the bridge extension; the rest
+// Chrome's extension API can't set, so the host keeps them and applies them
+// over DevTools (host/site-permissions.ts).
+export const PERMISSION_KINDS = [
+  'notifications',
+  'geolocation',
+  'camera',
+  'microphone',
+  'clipboard',
+  'cameraPanTiltZoom',
+  'midi',
+  'midiSysex',
+  'idleDetection',
+  'windowManagement',
+  'localFonts',
+  'storageAccess',
+  'localNetwork'
+] as const
+export type PermissionKind = (typeof PERMISSION_KINDS)[number]
+export type PermissionDecision = 'allow' | 'block' | 'dismiss'
+
+export interface PermissionRequest {
+  id: string
+  // The site asking: the tab's top-level origin, or for storage access the
+  // embedded site's (whose cookies on `topOrigin` it wants).
+  origin: string
+  topOrigin?: string
+  kinds: PermissionKind[]
+}
+
 export interface WindowState {
   windowId: number
   workspaces: WorkspaceSummary[]
@@ -35,6 +66,8 @@ export interface WindowState {
   // selected, greyed out over a snapshot of how it last looked here.
   paused?: { entryId: string; title: string; snapshot?: string }
   activeEntryId?: string
+  // A permission the page this window shows is asking for.
+  permission?: PermissionRequest
 }
 
 export type HostCommand =
@@ -61,6 +94,7 @@ export type HostCommand =
   | { type: 'newWorkspace'; name?: string; color?: WorkspaceColor; icon?: string }
   | { type: 'editWorkspace'; workspaceId: string; name?: string; color?: WorkspaceColor; icon?: string }
   | { type: 'deleteWorkspace'; workspaceId: string }
+  | { type: 'answerPermission'; id: string; decision: PermissionDecision }
 
 // The page-side names the launcher installs and calls.
 export const UI_BINDING = 'groveHostCall'

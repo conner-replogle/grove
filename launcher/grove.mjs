@@ -24,6 +24,7 @@ import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GroveHost } from '../host/host.ts'
+import { SitePermissions } from '../host/site-permissions.ts'
 import { Store } from '../host/store.ts'
 import { UI_BINDING, UI_RECEIVER } from '../shared/protocol.ts'
 import { PipeCDP } from './cdp.mjs'
@@ -68,15 +69,18 @@ if (runningPid()) {
 // file changes. The folder stays put, so the extension keeps its id.
 function prepareBridge() {
   const dir = join(PROFILE, 'Grove Bridge')
-  const script = readFileSync(join(EXTENSION_SOURCE, 'grove-bridge.js'))
-  const hash = createHash('sha256').update(script).digest()
+  const files = readdirSync(EXTENSION_SOURCE).filter((f) => f.endsWith('.js')).sort()
+  const sources = new Map(files.map((f) => [f, readFileSync(join(EXTENSION_SOURCE, f))]))
+  const digest = createHash('sha256')
+  for (const [f, source] of sources) digest.update(f).update(source)
+  const hash = digest.digest()
   const name = `grove-bridge.${hash.toString('hex').slice(0, 12)}.js`
   const manifest = JSON.parse(readFileSync(join(EXTENSION_SOURCE, 'manifest.json'), 'utf8'))
   manifest.version = `${manifest.version}.${hash.readUInt16BE(0)}`
   manifest.background.service_worker = name
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, name), script)
+  for (const [f, source] of sources) writeFileSync(join(dir, f === 'grove-bridge.js' ? name : f), source)
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2))
   return dir
 }
@@ -137,6 +141,12 @@ chrome.on('exit', (code) => {
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => chrome.kill('SIGTERM'))
 
 const cdp = new PipeCDP(chrome.stdio[3], chrome.stdio[4])
+
+// The site permissions Grove keeps itself, applied before any page asks.
+const sitePermissions = new SitePermissions(join(PROFILE, 'grove-permissions.json'), (permission, setting, origin) =>
+  cdp.send('Browser.setPermission', { permission, setting, origin })
+)
+await sitePermissions.applyAll()
 let bundle = readFileSync(BUNDLE, 'utf8')
 
 // ---- The host and the windows' UI ----
@@ -165,7 +175,8 @@ const host = new GroveHost(
       cdp.send('Runtime.evaluate', { expression: `window.${UI_RECEIVER}?.openNewTabSearch()` }, sessionId).catch(() => {})
     }
   },
-  log
+  log,
+  sitePermissions
 )
 
 // DevTools can't say which window a chrome://webui-browser page belongs to
@@ -283,8 +294,10 @@ cdp.on('Target.attachedToTarget', async ({ sessionId, targetInfo, waitingForDebu
       }
     } else if (targetInfo.type === 'service_worker' && BRIDGE_SCRIPT.test(targetInfo.url)) {
       await attachBridge(sessionId, waitingForDebugger)
-    } else if (waitingForDebugger) {
-      await cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId)
+    } else {
+      if (waitingForDebugger) await cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId)
+      // A website's service worker: leave it alone.
+      if (targetInfo.type === 'service_worker') await cdp.send('Target.detachFromTarget', { sessionId })
     }
   } catch (e) {
     log('attach failed', targetInfo.type, e.message)
@@ -331,6 +344,20 @@ const attachMissed = ({ targetInfo }) => {
 }
 cdp.on('Target.targetCreated', attachMissed)
 cdp.on('Target.targetInfoChanged', attachMissed)
+
+// With browser-level auto-attach on (below), Chrome holds a page that a
+// site opens with window.open until a debugger lets it run, even though
+// pages are filtered out of auto-attach and nothing asked to wait. Nothing
+// would, so the popup and the page that opened it (they share a renderer)
+// stay frozen. Let each one go.
+cdp.on('Target.targetCreated', async ({ targetInfo }) => {
+  if (targetInfo.type !== 'page' || !targetInfo.openerId) return
+  try {
+    const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: targetInfo.targetId, flatten: true })
+    await cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId)
+    await cdp.send('Target.detachFromTarget', { sessionId })
+  } catch {}
+})
 await cdp.send('Target.setDiscoverTargets', { discover: true })
 
 // Pages aren't paused on attach: a paused window UI that loses its session
