@@ -18,8 +18,8 @@
 //                  restores and mirrors tabs itself and fights this host)
 //   GROVE_PROFILE  the profile directory  (default ~/.config/grove-webium)
 import { spawn } from 'node:child_process'
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GroveHost } from '../host/host.ts'
@@ -37,8 +37,28 @@ const UI_URL = 'chrome://webui-browser'
 const BRIDGE_SCRIPT = '/grove-bridge.js'
 
 const dev = process.argv.includes('--dev')
-const urls = process.argv.slice(2).filter((a) => !a.startsWith('--'))
+// URLs and Chrome flags (--new-window, ...) go on to Chrome.
+const passArgs = process.argv.slice(2).filter((a) => a !== '--dev')
 const log = (...a) => dev && console.log('[grove]', ...a)
+
+// If Grove is already running on this profile, Chrome hands this launch
+// (a new window, a URL) to it and exits. Leave that instance's profile and
+// workspaces alone: no host here, just the handoff.
+function runningPid() {
+  try {
+    const [host, pid] = readlinkSync(join(PROFILE, 'SingletonLock')).split(/-(?=\d+$)/)
+    if (host !== hostname()) return undefined
+    process.kill(Number(pid), 0)
+    return Number(pid)
+  } catch {
+    return undefined
+  }
+}
+if (runningPid()) {
+  const handoff = spawn(CHROME, [`--user-data-dir=${PROFILE}`, ...passArgs], { stdio: 'ignore' })
+  await new Promise((done) => handoff.on('exit', done))
+  process.exit(0)
+}
 
 // Grove's host restores the workspaces, so Chrome must not also restore its
 // own last session (every restart would duplicate the tabs): drop Chrome's
@@ -79,7 +99,8 @@ const chrome = spawn(
     '--ozone-platform-hint=auto',
     '--no-first-run',
     '--no-default-browser-check',
-    ...urls
+    '--class=grove',
+    ...passArgs
   ],
   { stdio: ['ignore', 'ignore', dev ? 'inherit' : 'ignore', 'pipe', 'pipe'] }
 )
