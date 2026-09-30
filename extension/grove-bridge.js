@@ -71,6 +71,15 @@ globalThis.grove = {
     const tab = await chrome.tabs.update(tabId, { active: true })
     return tabInfo(tab)
   },
+  // A small JPEG of what a window shows now, or null where Chrome won't
+  // capture (its own pages).
+  async capture(windowId) {
+    try {
+      return await chrome.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality: 45 })
+    } catch {
+      return null
+    }
+  },
   async remove(tabIds) {
     await chrome.tabs.remove(tabIds)
   },

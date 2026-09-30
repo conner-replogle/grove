@@ -125,7 +125,7 @@ class GroveSidebar extends HTMLElement {
   }
 
   private essential(e: EntryView, s: WindowState): HTMLElement {
-    const tile = el('div', `essential${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}`)
+    const tile = el('div', `essential${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}${s.paused?.entryId === e.id ? ' paused' : ''}`)
     tile.title = e.title
     tile.style.setProperty('--favicon', `url("${faviconFor(e)}")`)
     tile.append(favicon(e))
@@ -140,7 +140,7 @@ class GroveSidebar extends HTMLElement {
   }
 
   private tabRow(e: EntryView, s: WindowState, section: 'pinned' | 'tabs'): HTMLElement {
-    const row = el('div', `tab${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}`)
+    const row = el('div', `tab${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}${s.paused?.entryId === e.id ? ' paused' : ''}`)
     row.title = `${e.title}\n${e.url}`
     row.append(favicon(e), el('span', 'label', e.title || e.url || 'New Tab'))
     const close = el('button', 'close')

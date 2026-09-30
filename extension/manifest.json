@@ -4,5 +4,6 @@
   "description": "Lets Grove's host move and manage tabs across windows. Loaded by the Grove launcher.",
   "version": "0.1.0",
   "permissions": ["tabs"],
+  "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "grove-bridge.js" }
 }

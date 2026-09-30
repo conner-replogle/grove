@@ -31,6 +31,9 @@ export interface WindowState {
   workspace: WorkspaceSummary & { entries: EntryView[]; groups: Group[] }
   // Shared by every workspace.
   essentials: EntryView[]
+  // The window's entry is showing in another window: this one keeps it
+  // selected, greyed out over a snapshot of how it last looked here.
+  paused?: { entryId: string; title: string; snapshot?: string }
   activeEntryId?: string
 }
 

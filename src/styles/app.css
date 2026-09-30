@@ -185,3 +185,50 @@ webui-browser-bookmark-bar { display: none !important; }
 }
 :host(.grove-resizing) { cursor: col-resize; user-select: none; }
 :host(.grove-resizing) #main { pointer-events: none; }
+
+/* ---- A page paused here because another window shows it (paused.ts) ---- */
+
+#main { position: relative; }
+.grove-paused {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  background: light-dark(#e8e8e8, #262626) top left / 100% auto no-repeat;
+}
+.grove-paused::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  backdrop-filter: grayscale(1) blur(1.5px);
+  background: light-dark(rgba(255, 255, 255, 0.45), rgba(0, 0, 0, 0.5));
+}
+.grove-paused-card {
+  position: relative;
+  max-width: min(420px, 80%);
+  padding: 18px 22px;
+  border-radius: 14px;
+  text-align: center;
+  background: light-dark(rgba(255, 255, 255, 0.9), rgba(36, 36, 36, 0.92));
+  box-shadow: var(--zen-big-shadow);
+}
+.grove-paused-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grove-paused-note { margin-top: 4px; opacity: 0.65; font-size: 12px; }
+.grove-paused-button {
+  margin-top: 12px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  color: white;
+  background: var(--zen-primary-color);
+  cursor: pointer;
+}

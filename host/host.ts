@@ -67,6 +67,8 @@ export class GroveHost {
   // Windows open at start-up whose workspace isn't shown yet, with Chrome's
   // own start-up tabs to drop once it is.
   private readonly startup = new Map<number, number[]>()
+  // The last look of an entry a window gave up to another one (a JPEG data URL).
+  private readonly snapshots = new Map<string, string>()
   private readonly uiReady = new Set<number>()
 
   private readonly store: Store
@@ -343,11 +345,12 @@ export class GroveHost {
       if (from === windowId) {
         await bridge.call('activate', tabId)
       } else {
-        await this.keepWindowOpen(from, [tabId])
+        // The window giving the page up keeps the entry selected, paused.
+        const src = this.windows.get(from)
+        if (src?.activeEntryId === entryId) await this.pause(from, entryId)
+        else await this.keepWindowOpen(from, [tabId])
         this.tabWindow.set(tabId, windowId)
         await bridge.call('move', { tabId, windowId })
-        const src = this.windows.get(from)
-        if (src?.activeEntryId === entryId) await this.afterLoss(from)
       }
     } else {
       const entry = this.entry(entryId)
@@ -409,6 +412,18 @@ export class GroveHost {
     else await this.newTab(windowId)
   }
 
+  // A window is about to give its page to another window: snapshot it, then
+  // show a blank placeholder tab under the UI's paused overlay (activated
+  // first, so Chrome doesn't pick one of the window's other tabs).
+  private async pause(windowId: number, entryId: string): Promise<void> {
+    const snapshot = await this.bridge!.call<string | null>('capture', windowId).catch(() => null)
+    if (snapshot) this.snapshots.set(entryId, snapshot)
+    else this.snapshots.delete(entryId)
+    const placeholder = [...this.placeholders].find((t) => this.tabWindow.get(t) === windowId)
+    if (placeholder !== undefined) await this.bridge!.call('activate', placeholder)
+    else await this.createTab(windowId, 'about:blank', undefined, { placeholder: true, active: true })
+  }
+
   // A window lost the entry it showed (closed, or moved to another window):
   // show its most recent entry that is already open here, without pulling
   // pages from other windows.
@@ -422,7 +437,10 @@ export class GroveHost {
     })
     const next = M.mostRecent(here)
     b.activeEntryId = next?.id
-    if (next) await this.bridge?.call('activate', this.tabOf.get(next.id))
+    if (next) {
+      await this.bridge?.call('activate', this.tabOf.get(next.id))
+      await this.dropPlaceholders(windowId)
+    }
     this.pushAll()
   }
 
@@ -481,6 +499,7 @@ export class GroveHost {
   }
 
   private closeEntries(ids: string[]): void {
+    ids.forEach((id) => this.snapshots.delete(id))
     this.update((m) => M.removeEntries(m, ids))
   }
 
@@ -553,6 +572,13 @@ export class GroveHost {
     if (b) this.ui.push(windowId, this.view(windowId, b))
   }
 
+  private pausedIn(windowId: number, b: Binding): WindowState['paused'] {
+    const entryId = b.activeEntryId
+    const tabId = entryId ? this.tabOf.get(entryId) : undefined
+    if (!entryId || tabId === undefined || this.tabWindow.get(tabId) === windowId) return undefined
+    return { entryId, title: this.entry(entryId)?.title ?? '', snapshot: this.snapshots.get(entryId) }
+  }
+
   private view(windowId: number, b: Binding): WindowState {
     const ws = M.getWorkspace(this.model, b.workspaceId)
     const entryView = (e: Entry): EntryView => {
@@ -581,7 +607,8 @@ export class GroveHost {
         entries: ws.entries.map(entryView)
       },
       essentials: this.model.essentials.map(entryView),
-      activeEntryId: b.activeEntryId
+      activeEntryId: b.activeEntryId,
+      paused: this.pausedIn(windowId, b)
     }
   }
 }

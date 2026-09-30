@@ -439,3 +439,6 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 .ws-cancel:hover { background: var(--tab-background-color-hover); }
 .ws-save { background: var(--ws-color); color: white; }
 .ws-save:hover { filter: brightness(1.1); }
+
+/* Selected here, but showing in another window. */
+.paused { filter: grayscale(1); opacity: 0.55; }

@@ -6,6 +6,7 @@ import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
 import { addStyles, patchMethod } from './patch'
 import { anchorExtensionsMenu } from './extensions-anchor'
+import { showPausedPages } from './paused'
 import { sidebarResizer } from './resize'
 import './sidebar'
 
@@ -24,6 +25,7 @@ if (!window.__grove) {
   // Grove's sidebar takes the tab strip's place. Webium's strip stays in
   // the page (hidden) because the app listens to its tab events.
   keepSidebarMounted()
+  showPausedPages(() => document.querySelector('webui-browser-app')?.shadowRoot?.querySelector<HTMLElement>('#main') ?? null)
 
   // Webium routes every mousedown in the tab strip into its drag code,
   // which assumes a horizontal strip (and, fed vertical positions, can ask
