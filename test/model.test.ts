@@ -13,6 +13,8 @@ import {
   moveWorkspace,
   neighborWorkspace,
   normalize,
+  placeEntry,
+  placeGroup,
   recolorWorkspace,
   renameWorkspace,
   setEntryGroup,
@@ -283,5 +285,51 @@ describe('across workspaces', () => {
     expect(getWorkspace(m, home).groups).toEqual([])
     expect(titles(getWorkspace(m, b))).toEqual(['*p', 'z', 'a'])
     expect(workspaceOfEntry(m, id(h, 'a'))?.id).toBe(b)
+  })
+})
+
+describe('drag and drop', () => {
+  // a, b in folder F, then c; x pinned.
+  function tree(): Workspace {
+    let w = ws('*x', 'a', 'b', 'c')
+    ;[w] = createGroup(w, [id(w, 'a'), id(w, 'b')], 'F')
+    return w
+  }
+  const gid = (w: Workspace): string => w.groups[0].id
+
+  it('drops before an entry, taking its section', () => {
+    const w = tree()
+    expect(titles(placeEntry(w, id(w, 'c'), { beforeId: id(w, 'b'), pinned: false, groupId: gid(w) }))).toEqual([
+      '*x',
+      'a[F]',
+      'c[F]',
+      'b[F]'
+    ])
+    expect(titles(placeEntry(w, id(w, 'c'), { beforeId: id(w, 'x'), pinned: true }))).toEqual(['*c', '*x', 'a[F]', 'b[F]'])
+  })
+
+  it('drops at the end of a section', () => {
+    const w = tree()
+    expect(titles(placeEntry(w, id(w, 'c'), { pinned: true }))).toEqual(['*x', '*c', 'a[F]', 'b[F]'])
+    expect(titles(placeEntry(w, id(w, 'c'), { pinned: false, groupId: gid(w) }))).toEqual(['*x', 'a[F]', 'b[F]', 'c[F]'])
+    expect(titles(placeEntry(w, id(w, 'x'), { pinned: false }))).toEqual(['a[F]', 'b[F]', 'c', 'x'])
+  })
+
+  it('drops out of a folder, before it', () => {
+    const w = tree()
+    expect(titles(placeEntry(w, id(w, 'b'), { beforeId: id(w, 'a'), pinned: false }))).toEqual(['*x', 'b', 'a[F]', 'c'])
+  })
+
+  it('ignores a drop onto itself', () => {
+    const w = tree()
+    expect(placeEntry(w, id(w, 'c'), { beforeId: id(w, 'c'), pinned: false })).toBe(w)
+  })
+
+  it('moves a whole folder', () => {
+    const w = tree()
+    expect(titles(placeGroup(w, gid(w)))).toEqual(['*x', 'c', 'a[F]', 'b[F]'])
+    const moved = placeGroup(w, gid(w))
+    expect(titles(placeGroup(moved, gid(w), id(moved, 'c')))).toEqual(['*x', 'a[F]', 'b[F]', 'c'])
+    expect(placeGroup(w, gid(w), id(w, 'b'))).toBe(w)
   })
 })

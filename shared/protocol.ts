@@ -38,6 +38,10 @@ export type HostCommand =
   | { type: 'newFolder'; entryId: string }
   | { type: 'toggleFolder'; groupId: string }
   | { type: 'ungroup'; groupId: string }
+  // Drag and drop: `beforeId` is the entry the dragged one lands in front
+  // of; without it, the end of the section (pinned, the folder, or all).
+  | { type: 'moveEntry'; entryId: string; beforeId?: string; pinned: boolean; groupId?: string }
+  | { type: 'moveFolder'; groupId: string; beforeId?: string }
   | { type: 'switchWorkspace'; workspaceId: string }
   | { type: 'newWorkspace' }
   | { type: 'renameWorkspace'; workspaceId: string; name: string }

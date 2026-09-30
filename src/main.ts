@@ -5,6 +5,7 @@ import appCss from './styles/app.css'
 import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
 import { addStyles, patchMethod } from './patch'
+import { sidebarResizer } from './resize'
 import './sidebar'
 
 declare global {
@@ -46,14 +47,20 @@ if (!window.__grove) {
   })
 }
 
-// Puts <grove-sidebar> in the tab strip's slot as soon as Webium's app has
-// rendered it, and again if a re-render ever drops it.
+// Puts <grove-sidebar> in the tab strip's slot, and the sidebar's resize
+// handle in the window's grid, as soon as Webium's app has rendered them,
+// and again if a re-render ever drops them.
 function keepSidebarMounted(): void {
+  let resizer: HTMLElement | undefined
   const mount = (): boolean => {
-    const root = document.querySelector('webui-browser-app')?.shadowRoot
+    const app = document.querySelector<HTMLElement>('webui-browser-app')
+    const root = app?.shadowRoot
     const slot = root?.querySelector('.tabstripDiv')
-    if (!root || !slot) return false
+    const grid = root?.querySelector('#rootContainer')
+    if (!app || !root || !slot || !grid) return false
     if (!slot.querySelector('grove-sidebar')) slot.append(document.createElement('grove-sidebar'))
+    resizer ??= sidebarResizer(app)
+    if (resizer.parentNode !== grid) grid.append(resizer)
     return true
   }
   const wait = (): void => {

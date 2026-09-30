@@ -5,6 +5,7 @@
 // are Grove's own (Chrome's tab groups only live inside one window).
 import type { EntryView, WindowState } from '../shared/protocol.ts'
 import type { Color, Group } from '../shared/types.ts'
+import { Dragger } from './drag'
 import { send, subscribe } from './host-client'
 import { icons } from './icons'
 import sidebarCss from './styles/sidebar.css'
@@ -30,6 +31,10 @@ class GroveSidebar extends HTMLElement {
   private readonly root = this.attachShadow({ mode: 'open' })
   private state?: WindowState
   private menu?: HTMLElement
+  private readonly drag = new Dragger(this, this.root, () => this.state)
+  // A render that arrived while a drag was under way (it would pull the
+  // dragged row out from under the pointer).
+  private renderQueued = false
 
   connectedCallback(): void {
     const sheet = new CSSStyleSheet()
@@ -39,12 +44,23 @@ class GroveSidebar extends HTMLElement {
       this.state = s
       this.render()
     })
-    document.addEventListener('mousedown', () => this.closeMenu(), true)
+    document.addEventListener(
+      'mousedown',
+      (ev) => {
+        if (!this.menu || !ev.composedPath().includes(this.menu)) this.closeMenu()
+      },
+      true
+    )
   }
 
   private render(): void {
     const s = this.state
     if (!s) return
+    if (this.drag.active) {
+      this.renderQueued = true
+      return
+    }
+    this.renderQueued = false
     const ws = s.workspace
     const scroll = el('div', 'scroll')
 
@@ -57,11 +73,13 @@ class GroveSidebar extends HTMLElement {
     }
 
     const indicator = el('div', 'workspace-indicator')
+    indicator.dataset.kind = 'top'
     indicator.style.setProperty('--ws-color', COLOR_HEX[ws.color])
     indicator.append(iconEl('icon', icons.leaf), el('span', 'name', ws.name))
     scroll.append(indicator)
 
     const newTab = el('button', 'new-tab')
+    newTab.dataset.kind = 'top'
     newTab.append(iconEl('favicon icon', icons.plus), el('span', 'label', 'New Tab'))
     newTab.addEventListener('click', () => send({ type: 'newTab' }))
     scroll.append(newTab)
@@ -81,11 +99,17 @@ class GroveSidebar extends HTMLElement {
     if (this.menu) this.root.append(this.menu)
   }
 
+  // Called by the dragger when a drag ends.
+  dragEnded(): void {
+    if (this.renderQueued) this.render()
+  }
+
   private essential(e: EntryView, s: WindowState): HTMLElement {
     const tile = el('div', `essential${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}`)
     tile.title = e.title
     tile.style.setProperty('--favicon', `url("${faviconFor(e.url)}")`)
     tile.append(favicon(e))
+    tile.dataset.kind = 'essential'
     this.wire(tile, e)
     return tile
   }
@@ -98,11 +122,14 @@ class GroveSidebar extends HTMLElement {
     close.title = 'Close tab'
     close.append(svg(icons.x))
     close.addEventListener('mousedown', (ev) => ev.stopPropagation())
+    close.addEventListener('pointerdown', (ev) => ev.stopPropagation())
     close.addEventListener('click', (ev) => {
       ev.stopPropagation()
       send({ type: 'close', entryId: e.id })
     })
     row.append(close)
+    row.dataset.kind = 'tab'
+    if (e.groupId) row.dataset.group = e.groupId
     this.wire(row, e)
     return row
   }
@@ -113,6 +140,9 @@ class GroveSidebar extends HTMLElement {
     box.style.setProperty('--folder-accent', COLOR_HEX[group.color])
     const head = el('div', 'folder-header')
     head.append(iconEl('folder-icon', folderSvg), el('span', 'label', group.title || 'Folder'))
+    head.dataset.kind = 'folder'
+    head.dataset.group = group.id
+    head.addEventListener('pointerdown', (ev) => this.drag.press(ev, { groupId: group.id }))
     head.addEventListener('click', () => send({ type: 'toggleFolder', groupId: group.id }))
     head.addEventListener('contextmenu', (ev) => {
       ev.preventDefault()
@@ -148,9 +178,11 @@ class GroveSidebar extends HTMLElement {
   }
 
   private wire(node: HTMLElement, e: EntryView): void {
+    node.dataset.entry = e.id
     node.addEventListener('mousedown', (ev) => {
       if (ev.button === 0) send({ type: 'activate', entryId: e.id })
     })
+    node.addEventListener('pointerdown', (ev) => this.drag.press(ev, { entryId: e.id }))
     node.addEventListener('auxclick', (ev) => {
       if (ev.button === 1) send({ type: 'close', entryId: e.id })
     })
@@ -213,6 +245,7 @@ function favicon(e: EntryView): HTMLElement {
   const img = el('img', 'favicon')
   img.src = faviconFor(e.url)
   img.alt = ''
+  img.draggable = false
   return img
 }
 

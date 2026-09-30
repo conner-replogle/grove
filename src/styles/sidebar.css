@@ -294,3 +294,47 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 
 /* A blank tab's globe is quieter than a real favicon. */
 .favicon.blank-page { color: color-mix(in srgb, currentColor 60%, transparent); }
+
+/* ---- Drag and drop ---- */
+
+:host(.drag-active) { cursor: grabbing; }
+:host(.drag-active) * { cursor: grabbing !important; }
+.dragging { opacity: 0.35; }
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 20;
+  margin: 0 !important;
+  pointer-events: none;
+  opacity: 0.9;
+  background: var(--zen-toolbar-element-bg-hover, var(--tab-background-color-hover));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  scale: 1.02;
+}
+.drop-indicator {
+  position: absolute;
+  z-index: 19;
+  pointer-events: none;
+  border-radius: 2px;
+  background: var(--zen-primary-color);
+}
+.folder-header.drop-into::before,
+.essentials.drop-into {
+  background: color-mix(in srgb, var(--zen-primary-color) 25%, transparent);
+  outline: 1.5px solid color-mix(in srgb, var(--zen-primary-color) 70%, transparent);
+  outline-offset: -1.5px;
+}
+.essentials.drop-into { border-radius: var(--radius-medium); }
+.essentials.empty-zone { display: none; }
+.essentials.empty-zone.open {
+  display: grid;
+  place-items: center;
+  height: var(--essential-h);
+  margin: 6px 0 2px;
+  padding: 0;
+  border-radius: var(--radius-medium);
+  border: 1.5px dashed color-mix(in srgb, currentColor 30%, transparent);
+  color: color-mix(in srgb, currentColor 60%, transparent);
+  font-size: 12px;
+}

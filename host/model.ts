@@ -165,6 +165,37 @@ export function moveEntry(ws: Workspace, id: string, to: MoveTarget): Workspace 
   return normalize({ ...ws, entries: rest })
 }
 
+// Where a dragged entry lands: just before `beforeId`, or at the end of its
+// section (the pinned tabs, the folder `groupId`, or the whole list).
+export interface Drop {
+  beforeId?: string
+  pinned: boolean
+  groupId?: string
+}
+
+export function placeEntry(ws: Workspace, id: string, to: Drop): Workspace {
+  if (to.beforeId === id || !ws.entries.some((e) => e.id === id)) return ws
+  const rest = ws.entries.filter((e) => e.id !== id)
+  let index = to.beforeId ? rest.findIndex((e) => e.id === to.beforeId) : -1
+  if (index < 0) {
+    if (to.pinned) index = rest.filter((e) => e.pinned).length
+    else if (to.groupId) index = rest.findLastIndex((e) => e.groupId === to.groupId) + 1 || rest.length
+    else index = rest.length
+  }
+  return moveEntry(ws, id, { index, pinned: to.pinned, groupId: to.pinned ? undefined : to.groupId })
+}
+
+// Moves a whole folder to just before `beforeId` (an entry outside it), or
+// to the end of the list.
+export function placeGroup(ws: Workspace, groupId: string, beforeId?: string): Workspace {
+  const members = ws.entries.filter((e) => e.groupId === groupId)
+  if (!members.length || members.some((e) => e.id === beforeId)) return ws
+  const rest = ws.entries.filter((e) => e.groupId !== groupId)
+  const at = beforeId ? rest.findIndex((e) => e.id === beforeId) : -1
+  rest.splice(at < 0 ? rest.length : at, 0, ...members)
+  return normalize({ ...ws, entries: rest })
+}
+
 // Pinning puts the entry at the end of the pinned tabs; unpinning at the
 // start of the others.
 export function setPinned(ws: Workspace, id: string, pinned: boolean): Workspace {
