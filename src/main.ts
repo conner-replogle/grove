@@ -6,7 +6,7 @@ import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
 import urlbarResultsCss from './styles/urlbar-results.css'
 import { addStyles, patchMethod } from './patch'
-import { anchorExtensionsMenu } from './extensions-anchor'
+import { anchorExtensionsBar } from './extensions-anchor'
 import { showPausedPages } from './paused'
 import { sidebarResizer } from './resize'
 import { openUrlBarOnNewTab, releasePageFocus } from './urlbar'
@@ -74,10 +74,9 @@ function keepSidebarMounted(): void {
     const box = root.querySelector('#addressBox')
     const extensions = root.querySelector('#extensionsBar')
     if (box && extensions && extensions.parentNode !== box) box.append(extensions)
-    const menuButton = extensions?.shadowRoot?.querySelector<HTMLElement>('#extensionsMenuButton')
-    if (menuButton && !anchored.has(menuButton)) {
-      anchored.add(menuButton)
-      void anchorExtensionsMenu(menuButton)
+    if (extensions?.shadowRoot?.querySelector('#extensionsMenuButton') && !anchored.has(extensions)) {
+      anchored.add(extensions)
+      void anchorExtensionsBar(extensions)
     }
     return true
   }
