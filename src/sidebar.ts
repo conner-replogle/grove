@@ -14,6 +14,7 @@ import { send, subscribe } from './host-client'
 import { icons } from './icons'
 import sidebarCss from './styles/sidebar.css'
 import { svg } from './svg'
+import { expectNewTab } from './urlbar'
 import { COLOR_HEX, workspaceEditor, workspaceIcon } from './workspace-editor'
 import folderSvg from './zen/folder-icon.svg'
 import zenTokens from './zen/tokens.css'
@@ -101,7 +102,10 @@ class GroveSidebar extends HTMLElement {
     const newTab = el('button', 'new-tab')
     newTab.dataset.kind = 'tabs-start'
     newTab.append(iconEl('favicon icon', icons.plus), el('span', 'label', 'New Tab'))
-    newTab.addEventListener('click', () => send({ type: 'newTab' }))
+    newTab.addEventListener('click', () => {
+      expectNewTab()
+      send({ type: 'newTab' })
+    })
     scroll.append(newTab)
 
     const tabs = ws.entries.filter((e) => !e.pinned)

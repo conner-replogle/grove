@@ -6,12 +6,21 @@ import { UI_BINDING, UI_RECEIVER, type HostCommand, type WindowState } from '../
 type Listener = (state: WindowState) => void
 
 const listeners = new Set<Listener>()
+const urlBarListeners = new Set<() => void>()
+
+// Calls `fn` when the host asks this window to open its URL bar (a new tab).
+export function onFocusUrlBar(fn: () => void): void {
+  urlBarListeners.add(fn)
+}
 let last: WindowState | undefined
 
 ;(window as unknown as Record<string, unknown>)[UI_RECEIVER] = {
   update(state: WindowState) {
     last = state
     listeners.forEach((l) => l(state))
+  },
+  focusUrlBar() {
+    urlBarListeners.forEach((l) => l())
   }
 }
 

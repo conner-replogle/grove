@@ -9,6 +9,7 @@ import { addStyles, patchMethod } from './patch'
 import { anchorExtensionsMenu } from './extensions-anchor'
 import { showPausedPages } from './paused'
 import { sidebarResizer } from './resize'
+import { openUrlBarOnNewTab, releasePageFocus } from './urlbar'
 import './sidebar'
 
 declare global {
@@ -24,6 +25,7 @@ if (!window.__grove) {
   addStyles('webui-browser-searchbox', searchboxCss)
   addStyles('cr-searchbox-match', urlbarResultsCss)
   closeUrlBarAfterUse()
+  openUrlBarOnNewTab()
 
   // Grove's sidebar takes the tab strip's place. Webium's strip stays in
   // the page (hidden) because the app listens to its tab events.
@@ -100,6 +102,7 @@ function closeUrlBarAfterUse(): void {
     let el: Element | null = document.activeElement
     while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement
     if (el instanceof HTMLElement) el.blur()
+    releasePageFocus()
   }
   document.addEventListener('keydown', (e) => {
     if (!inUrlBar(e) || e.isComposing) return

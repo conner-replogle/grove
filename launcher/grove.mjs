@@ -127,6 +127,11 @@ const host = new GroveHost(
       if (!sessionId) return
       const expression = `window.${UI_RECEIVER}?.update(${JSON.stringify(state)})`
       cdp.send('Runtime.evaluate', { expression }, sessionId).catch(() => {})
+    },
+    focusUrlBar(windowId) {
+      const sessionId = sessionOfWindow(windowId)
+      if (!sessionId) return
+      cdp.send('Runtime.evaluate', { expression: `window.${UI_RECEIVER}?.focusUrlBar()` }, sessionId).catch(() => {})
     }
   },
   log
@@ -329,6 +334,7 @@ if (dev) {
   // Evaluate JS in the windows' UI (or, at /bridge, in the bridge extension)
   // from a shell, over a socket only this user can open:
   //   curl --unix-socket $XDG_RUNTIME_DIR/grove-ui-dev.sock -d '<js>' http://ui/eval
+  // or send one raw CDP command at /cdp.
   const { createServer } = await import('node:http')
   const { rmSync } = await import('node:fs')
   const socket = `${process.env.XDG_RUNTIME_DIR ?? '/tmp'}/grove-ui-dev.sock`
@@ -336,6 +342,13 @@ if (dev) {
   createServer(async (req, res) => {
     let body = ''
     for await (const chunk of req) body += chunk
+    // /cdp takes {method, params, sessionId?} and sends it as is.
+    if (req.url?.includes('cdp')) {
+      const { method, params, sessionId } = JSON.parse(body)
+      const r = await cdp.send(method, params ?? {}, sessionId).catch((e) => ({ error: e.message }))
+      res.end(JSON.stringify(r, null, 1) + '\n')
+      return
+    }
     const targets = req.url?.includes('bridge') ? [bridgeSession].filter(Boolean) : [...uiSessions.keys()]
     const out = []
     for (const sessionId of targets) {

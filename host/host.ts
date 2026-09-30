@@ -37,6 +37,8 @@ export interface Bridge {
 
 export interface UiSink {
   push(windowId: number, state: WindowState): void
+  // Opens the window's URL bar with keyboard focus, as Ctrl+L does.
+  focusUrlBar(windowId: number): void
 }
 
 interface Binding {
@@ -175,6 +177,8 @@ export class GroveHost {
     const entry = this.adoptTab(tab)
     const b = this.bindWindow(tab.windowId)
     if (tab.active) this.setActive(tab.windowId, b, entry.id)
+    // A new tab of the user's own (Ctrl+T) opens the URL bar, as New Tab does.
+    if (tab.active && isNewTabPage(tab.url)) this.ui.focusUrlBar(tab.windowId)
     this.queuePush()
   }
 
@@ -369,6 +373,9 @@ export class GroveHost {
     )
     this.setActive(windowId, b, entry.id)
     await this.createTab(windowId, NEW_TAB_URL, entry.id)
+    // Chrome has made the new tab active (and given its page the keyboard):
+    // open the URL bar, as Zen does for a new tab.
+    this.ui.focusUrlBar(windowId)
     await this.dropPlaceholders(windowId)
     this.pushAll()
   }
