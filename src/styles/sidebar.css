@@ -291,3 +291,6 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
   text-align: start;
 }
 .menu-item:hover { background: var(--tab-background-color-hover); }
+
+/* A blank tab's globe is quieter than a real favicon. */
+.favicon.blank-page { color: color-mix(in srgb, currentColor 60%, transparent); }

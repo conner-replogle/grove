@@ -207,7 +207,9 @@ function iconEl(cls: string, markup: string): HTMLElement {
 
 function favicon(e: EntryView): HTMLElement {
   if (e.loading) return el('span', 'favicon loading')
-  if (!e.url || e.url.startsWith('chrome://newtab')) return iconEl('favicon icon', icons.plus)
+  // A blank tab is a page like any other: a globe, never the + of the
+  // New Tab button.
+  if (!e.url || e.url.startsWith('chrome://newtab')) return iconEl('favicon icon blank-page', icons.globe)
   const img = el('img', 'favicon')
   img.src = faviconFor(e.url)
   img.alt = ''
