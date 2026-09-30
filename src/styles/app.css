@@ -70,32 +70,78 @@
   --cr-searchbox-font-size: 13px;
   --color-searchbox-background: transparent;
   --color-searchbox-foreground: color-mix(in srgb, var(--toolbox-textcolor) 70%, transparent);
+  --cr-searchbox-icon-left-position: 9px;
+  --cr-searchbox-icon-right-position: 5px;
+  margin: 0;
   flex: 1;
   min-width: 0;
   font-weight: 500;
 }
-/* Zen's floating URL bar: while the address box has focus it lifts out of
- * the sidebar and floats over the page, wide enough for its suggestions,
- * with everything behind it dimmed. The sidebar keeps its slot. */
+/* Zen's floating URL bar: while its text field has focus the address box
+ * lifts out of the sidebar into a panel centered over the window, with
+ * everything behind it dimmed. The sidebar keeps its slot. Colors for the
+ * field and Chrome's suggestion rows (searchbox.css, urlbar-results.css)
+ * are set here and inherit into their shadow roots. */
 #addressBox:has(#address:focus-within) {
   position: fixed;
   z-index: 1000;
-  top: 16vh;
+  top: 14vh;
   left: 50%;
   translate: -50% 0;
-  width: min(720px, 72vw);
-  height: 44px;
+  width: clamp(440px, 52vw, 680px);
+  height: 52px;
   margin: 0;
   background: transparent;
-  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
-  border-radius: 14px;
+  border-radius: 16px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45);
+  animation: grove-urlbar-in 0.12s ease-out;
+}
+@keyframes grove-urlbar-in {
+  from { opacity: 0; scale: 0.98; }
 }
 #addressBox:has(#address:focus-within):hover { background: transparent; }
 #addressBox:has(#address:focus-within) #address {
-  --cr-searchbox-height: 44px;
-  --cr-searchbox-font-size: 15px;
+  margin: 0;
+  --cr-searchbox-height: 52px;
+  --cr-searchbox-input-height: 52px;
+  --cr-searchbox-font-size: 16px;
+  --cr-searchbox-icon-left-position: 18px;
+  --cr-searchbox-icon-right-position: 12px;
+  --cr-searchbox-icon-size-in-searchbox: 18px;
+
+  --grove-url-bg: light-dark(#fbfbfc, #232326);
+  --grove-url-fg: light-dark(#1d1d1f, #ececef);
+  --grove-url-dim: color-mix(in srgb, var(--grove-url-fg) 55%, transparent);
+  --grove-url-line: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
+  --grove-url-row: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.08));
+  --grove-url-link: light-dark(#2f6fd6, #8fb8ff);
+
+  --color-searchbox-background: transparent;
+  --color-searchbox-foreground: var(--grove-url-fg);
+  --color-searchbox-placeholder: var(--grove-url-dim);
+  --color-searchbox-results-background: transparent;
+  --color-searchbox-results-foreground: var(--grove-url-fg);
+  --color-searchbox-results-foreground-selected: var(--grove-url-fg);
+  --color-searchbox-results-foreground-dimmed: var(--grove-url-dim);
+  --color-searchbox-results-dim-selected: var(--grove-url-dim);
+  --color-searchbox-results-typed-prefix: var(--grove-url-dim);
+  --color-searchbox-results-url: var(--grove-url-link);
+  --color-searchbox-results-url-selected: var(--grove-url-link);
+  --color-searchbox-results-background-hovered: var(--grove-url-row);
+  --color-searchbox-results-background-selected: var(--grove-url-row);
+  --color-searchbox-results-icon: var(--grove-url-dim);
+  --color-searchbox-results-icon-selected: var(--grove-url-fg);
+  --color-searchbox-results-focus-indicator: transparent;
+  --color-searchbox-search-icon-background: var(--grove-url-dim);
+  --color-searchbox-results-icon-container-background: transparent;
+  --color-searchbox-dropdown-divider: var(--grove-url-line);
+  --color-searchbox-selection-background: color-mix(in srgb, var(--zen-primary-color) 45%, transparent);
+  --color-searchbox-selection-foreground: var(--grove-url-fg);
+  font-weight: 400;
 }
-#addressBox:has(#address:focus-within) #locationIconButton { top: 8.5px !important; left: 8px !important; }
+/* Webium's site-info button sits over the field's own icon; while typing
+ * the field's search icon is the one that counts. */
+#addressBox:has(#address:focus-within) #locationIconButton { display: none; }
 #searchBar:has(#address:focus-within)::after {
   content: '';
   order: 10;
@@ -106,7 +152,7 @@
 /* Zen keeps page actions inside the URL bar: the extensions button sits at
  * its right end (moved there by main.ts), out of the way while typing. */
 #addressBox #extensionsBar {
-  order: 1;
+  order: 2;
   flex: none;
   align-items: center;
   margin-inline-end: 2px;
@@ -115,10 +161,19 @@
 }
 #addressBox:has(#address:focus-within) #extensionsBar { display: none; }
 
+/* The site controls button (connection, permissions) sits at the right end
+ * of the bar next to the extensions button, as Zen's page actions do,
+ * rather than over the start of the field. */
 #locationIconButton {
-  left: 4px !important;
-  top: 3.5px !important;
+  position: static !important;
+  order: 1;
+  flex: none;
+  width: 26px;
+  min-width: 26px !important;
+  height: 26px !important;
+  border-radius: var(--radius-button) !important;
   --cr-button-background-color: transparent;
+  --cr-button-hover-background-color: var(--toolbarbutton-background-color-hover);
   background: transparent !important;
   box-shadow: none !important;
 }

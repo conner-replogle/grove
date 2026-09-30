@@ -4,6 +4,7 @@
 import appCss from './styles/app.css'
 import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
+import urlbarResultsCss from './styles/urlbar-results.css'
 import { addStyles, patchMethod } from './patch'
 import { anchorExtensionsMenu } from './extensions-anchor'
 import { showPausedPages } from './paused'
@@ -21,6 +22,8 @@ if (!window.__grove) {
 
   addStyles('webui-browser-app', zenTokens + appCss)
   addStyles('webui-browser-searchbox', searchboxCss)
+  addStyles('cr-searchbox-match', urlbarResultsCss)
+  closeUrlBarAfterUse()
 
   // Grove's sidebar takes the tab strip's place. Webium's strip stays in
   // the page (hidden) because the app listens to its tab events.
@@ -85,4 +88,26 @@ function keepSidebarMounted(): void {
     new MutationObserver(() => mount()).observe(root, { childList: true, subtree: true })
   }
   wait()
+}
+
+// The floating URL bar closes once it has done its job: Enter, a click on
+// a suggestion, or Escape. (Webium keeps the field focused after it
+// navigates, which would leave the panel open over the page.)
+function closeUrlBarAfterUse(): void {
+  const inUrlBar = (e: Event): boolean =>
+    e.composedPath().some((n) => n instanceof Element && n.tagName === 'WEBUI-BROWSER-SEARCHBOX')
+  const close = (): void => {
+    let el: Element | null = document.activeElement
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement
+    if (el instanceof HTMLElement) el.blur()
+  }
+  document.addEventListener('keydown', (e) => {
+    if (!inUrlBar(e) || e.isComposing) return
+    if (e.key === 'Enter' || e.key === 'Escape') setTimeout(close, 0)
+  })
+  document.addEventListener('click', (e) => {
+    if (inUrlBar(e) && e.composedPath().some((n) => n instanceof Element && n.tagName === 'CR-SEARCHBOX-MATCH')) {
+      setTimeout(close, 0)
+    }
+  })
 }

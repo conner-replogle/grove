@@ -40,10 +40,23 @@ export function patchMethod<T extends unknown[], R>(
   })
 }
 
+// Runs `fn` on a custom element's class before the browser registers it.
+// That matters: the browser reads a class's lifecycle callbacks
+// (connectedCallback) once, at registration, so patching them any later
+// never reaches new instances. Grove's script runs before Webium's, so its
+// components are caught here; one already defined gets `fn` late.
+const beforeDefine = new Map<string, ((ctor: CustomElementConstructor) => void)[]>()
+const define = customElements.define.bind(customElements)
+customElements.define = (name: string, ctor: CustomElementConstructor, options?: ElementDefinitionOptions): void => {
+  for (const fn of beforeDefine.get(name) ?? []) fn(ctor)
+  beforeDefine.delete(name)
+  define(name, ctor, options)
+}
+
 function whenDefined(tag: string, fn: (ctor: CustomElementConstructor) => void): void {
   const existing = customElements.get(tag)
   if (existing) fn(existing)
-  else void customElements.whenDefined(tag).then(fn)
+  else beforeDefine.set(tag, [...(beforeDefine.get(tag) ?? []), fn])
 }
 
 // querySelectorAll that also looks inside open shadow roots.
