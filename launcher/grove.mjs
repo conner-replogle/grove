@@ -122,6 +122,10 @@ const chrome = spawn(
     '--no-first-run',
     '--no-default-browser-check',
     '--class=grove',
+    // --remote-debugging-pipe marks the browser as automated
+    // (navigator.webdriver = true), and bot walls like Akamai's then block
+    // it. Grove is a person's browser, not automation.
+    '--disable-blink-features=AutomationControlled',
     ...passArgs
   ],
   { stdio: ['ignore', 'ignore', dev ? 'inherit' : 'ignore', 'pipe', 'pipe'] }
