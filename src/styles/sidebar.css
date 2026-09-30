@@ -262,7 +262,11 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
   transition: filter 0.2s, opacity 0.2s;
 }
 .workspace-switcher button:hover { filter: none; opacity: 1; background: var(--zen-toolbar-element-bg); }
-.workspace-switcher button.active { filter: none; opacity: 1; color: var(--zen-sidebar-themed-icon-fill); }
+.workspace-switcher button.active { filter: none; opacity: 1; }
+/* Each workspace's icon in its own color. */
+.workspace-switcher button:is(:hover, .active) {
+  color: light-dark(color-mix(in srgb, var(--ws-color) 70%, black), color-mix(in srgb, var(--ws-color) 55%, white));
+}
 
 /* ---- Frozen entries (no page open anywhere) ---- */
 .frozen .favicon { opacity: 0.5; transition: opacity 1s; }
@@ -347,23 +351,40 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 
 /* ---- Workspace pins ---- */
 
-/* Between the workspace's pinned tabs and its other tabs, as in Zen. */
+/* Between the workspace's pinned tabs and its other tabs, as in Zen
+ * (vertical-tabs.css:136-228): a hairline, and at its right the Clear
+ * button, shown while the sidebar is hovered. */
 .pinned-separator {
-  height: 9px;
-  margin: 0 8px;
-  position: relative;
+  height: 22px;
+  margin: 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  transition: height 0.08s ease-in-out, opacity 0.06s ease-in-out;
 }
-.pinned-separator::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 4px;
+.pinned-separator .line {
+  flex: 1;
   height: 1px;
-  background: color-mix(in srgb, currentColor 15%, transparent);
+  margin: auto 4px;
+  background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
 }
-.pinned-separator.empty { height: 2px; }
-.pinned-separator.empty::after { display: none; }
+.pinned-separator.empty { height: 2px; opacity: 0; }
+.pinned-separator .clear {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s, visibility 0.15s;
+}
+:host(:hover) .pinned-separator .clear { opacity: 0.5; visibility: visible; }
+.pinned-separator .clear:hover { opacity: 1; }
+.pinned-separator .clear svg { width: 10px; height: 10px; stroke-width: 2.5; transition: transform 0.15s ease-in-out; }
+.pinned-separator .clear:active:hover svg { transform: translateY(2px); }
 
 /* ---- Workspace icons ---- */
 
@@ -434,6 +455,20 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 .ws-colors { display: flex; justify-content: space-between; }
 .ws-colors button { width: 20px; height: 20px; border-radius: 50%; background: var(--swatch); }
 .ws-colors button.selected { outline: 2px solid var(--swatch); outline-offset: 2px; }
+/* The custom color: a rainbow until one is picked. */
+.ws-custom-color {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  background: var(--swatch, conic-gradient(red, yellow, lime, cyan, blue, magenta, red));
+}
+.ws-custom-color::-webkit-color-swatch-wrapper,
+.ws-custom-color::-webkit-color-swatch { display: none; }
+.ws-custom-color.selected { outline: 2px solid var(--swatch); outline-offset: 2px; }
 .ws-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .ws-actions button { padding: 5px 12px; border-radius: 8px; font-weight: 600; }
 .ws-cancel:hover { background: var(--tab-background-color-hover); }

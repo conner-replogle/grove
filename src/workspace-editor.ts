@@ -2,7 +2,7 @@
 // existing one. A small panel over the bottom of the sidebar; Enter saves,
 // Escape cancels.
 import type { WorkspaceSummary } from '../shared/protocol.ts'
-import { COLORS, type Color } from '../shared/types.ts'
+import { COLORS, type Color, type WorkspaceColor } from '../shared/types.ts'
 import { svg } from './svg'
 import { WORKSPACE_ICONS } from './workspace-icons'
 
@@ -17,10 +17,12 @@ export const COLOR_HEX: Record<Color, string> = {
   gray: '#8e8e93'
 }
 
+export const colorHex = (c: WorkspaceColor): string => (c.startsWith('#') ? c : COLOR_HEX[c as Color])
+
 export interface WorkspaceFields {
   name: string
   icon: string
-  color: Color
+  color: WorkspaceColor
 }
 
 // A workspace's icon: one from the set, an emoji, or the default leaf.
@@ -39,7 +41,7 @@ export function workspaceEditor(
   done: (fields: WorkspaceFields | undefined) => void
 ): HTMLElement {
   let icon = existing?.icon ?? 'leaf'
-  let color: Color = existing?.color ?? defaults.color
+  let color: WorkspaceColor = existing?.color ?? defaults.color
 
   const panel = document.createElement('form')
   panel.className = 'ws-editor'
@@ -94,6 +96,16 @@ export function workspaceEditor(
     colorButtons.set(c, b)
     colors.append(b)
   }
+  // Any other color, from the system color picker.
+  const custom = document.createElement('input')
+  custom.type = 'color'
+  custom.className = 'ws-custom-color'
+  custom.title = 'Custom color'
+  custom.addEventListener('input', () => {
+    color = custom.value as WorkspaceColor
+    paint()
+  })
+  colors.append(custom)
 
   const actions = document.createElement('div')
   actions.className = 'ws-actions'
@@ -123,7 +135,11 @@ export function workspaceEditor(
   function paint(): void {
     for (const [key, b] of iconButtons) b.classList.toggle('selected', key === icon)
     for (const [c, b] of colorButtons) b.classList.toggle('selected', c === color)
-    panel.style.setProperty('--ws-color', COLOR_HEX[color])
+    const isCustom = color.startsWith('#')
+    custom.classList.toggle('selected', isCustom)
+    custom.value = colorHex(color)
+    custom.style.setProperty('--swatch', isCustom ? color : '')
+    panel.style.setProperty('--ws-color', colorHex(color))
   }
   paint()
   requestAnimationFrame(() => name.focus())

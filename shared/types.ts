@@ -13,6 +13,11 @@ export const COLORS = [
   'gray'
 ] as const
 export type Color = (typeof COLORS)[number]
+// A workspace's color, which themes its windows: a named one or any
+// '#rrggbb' picked in the workspace editor.
+export type WorkspaceColor = Color | `#${string}`
+export const isWorkspaceColor = (c: unknown): c is WorkspaceColor =>
+  COLORS.includes(c as Color) || (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c))
 
 // One page of a tab's back/forward list, as Electron's
 // navigationHistory.getAllEntries() returns it.
@@ -46,7 +51,7 @@ export interface Group {
 export interface Workspace {
   id: string
   name: string
-  color: Color
+  color: WorkspaceColor
   // A Lucide icon name from the workspace icon set, or an emoji.
   icon?: string
   // Tab order: pinned entries first, then the rest.

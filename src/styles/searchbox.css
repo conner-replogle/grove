@@ -9,15 +9,19 @@
   --cr-searchbox-font-size: 13px;
 }
 
-/* Floating (focused): the field and its suggestions are one panel. */
+/* Floating (focused): the field and its suggestions are one panel, as in
+ * Zen: translucent, blurred, a hairline border, a big soft shadow. */
 :host(:focus-within) #inputWrapper {
   background: var(--grove-url-bg) !important;
-  border-radius: 16px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2) !important;
-  outline: 1px solid var(--grove-url-line);
+  backdrop-filter: blur(40px);
+  border-radius: 15px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4), 0 3px 10px rgba(0, 0, 0, 0.25) !important;
+  outline: 1px solid var(--grove-url-border);
   overflow: hidden;
 }
+/* A hairline under the field, inset from the panel's edges. */
 :host(:focus-within[dropdown-is-visible]) .dropdownContainer {
+  margin: 0 8px;
+  padding: 8px 0;
   border-top: 1px solid var(--grove-url-line);
-  padding: 6px 0;
 }

@@ -1,12 +1,17 @@
 // Opening the URL bar for a new tab, as Zen does.
 //
+// New Tab (the sidebar row, or Ctrl+T via the host) makes no tab: it opens
+// the URL bar centered and empty, and the result picked there opens in a
+// new tab. Only a window with nothing to show gets a real New Tab page,
+// and its URL bar opens over it.
+//
 // Focusing the field isn't enough on its own. When a tab becomes active,
 // Webium focuses the <embed> that shows its page, which gives that page the
 // keyboard at the browser level; focusing an element of the window's UI
 // afterwards doesn't take it back, so typing would go to the page. So for a
 // New Tab page the <embed> isn't focused; the URL bar is, and the page gets
 // the keyboard once the URL bar closes.
-import { onFocusUrlBar } from './host-client'
+import { onFocusUrlBar, onOpenNewTabSearch } from './host-client'
 
 let holding = false
 // Webium's own <embed> focus, which the override below stands in front of.
@@ -19,10 +24,30 @@ function stopRetries(): void {
   retries = []
 }
 
-// Called before asking for a new tab from the UI (the New Tab button), so
-// the hold is on before Webium activates it.
-export function expectNewTab(): void {
-  hold()
+// A new tab's search is open: what it opens goes to a new tab. The field
+// starts empty; if the search closes without opening anything, it gets
+// back the page's address it had.
+let searchingForNewTab = false
+let addressBefore = ''
+
+type SearchboxField = Element & { setInputText?(t: string): void }
+const searchboxField = (): SearchboxField | null =>
+  document.querySelector('webui-browser-app')?.shadowRoot?.querySelector('#address') ?? null
+const fieldText = (): string =>
+  searchboxField()?.shadowRoot?.querySelector('#input')?.shadowRoot?.querySelector('input')?.value ?? ''
+
+export function openNewTabSearch(): void {
+  if (!searchingForNewTab) addressBefore = fieldText()
+  searchingForNewTab = true
+  setCentered(true)
+  focusField()
+  searchboxField()?.setInputText?.('')
+}
+
+function endNewTabSearch(opened = false): void {
+  if (!searchingForNewTab) return
+  searchingForNewTab = false
+  if (!opened) searchboxField()?.setInputText?.(addressBefore)
 }
 
 export function openUrlBarOnNewTab(): void {
@@ -40,6 +65,8 @@ export function openUrlBarOnNewTab(): void {
   }
 
   onFocusUrlBar(openForNewTab)
+  onOpenNewTabSearch(openNewTabSearch)
+  openInNewTabWhileSearching()
   document.addEventListener(
     'keydown',
     (e) => {
@@ -60,6 +87,7 @@ export function openUrlBarOnNewTab(): void {
 
 function openForNewTab(): void {
   hold()
+  setCentered(true)
   // Webium attaches the new page a moment after the tab activates, which
   // can take focus back; focus the field again then, until the user starts
   // typing or the bar closes.
@@ -86,6 +114,8 @@ function showsNewTabPage(embed: HTMLEmbedElement): boolean {
 // Webium switches to the new tab.
 export function releasePageFocus(): void {
   stopRetries()
+  setCentered(false)
+  endNewTabSearch()
   if (!holding) return
   holding = false
   const embed = activeEmbed()
@@ -131,4 +161,74 @@ function activeEmbed(): HTMLElement | undefined {
   const app = document.querySelector('webui-browser-app')?.shadowRoot
   if (app) walk(app)
   return found
+}
+
+// Where the floating URL bar opens (app.css): centered over the window for
+// a new tab, else in place, grown from the sidebar's URL bar. The sidebar
+// bar's position is kept on the app as --grove-urlbar-{top,left,width},
+// measured whenever it moves while it isn't floating.
+function setCentered(on: boolean): void {
+  document.querySelector('webui-browser-app')?.classList.toggle('grove-urlbar-center', on)
+}
+
+export function watchUrlBarPlace(box: HTMLElement): void {
+  const app = document.querySelector<HTMLElement>('webui-browser-app')
+  if (!app) return
+  const measure = (): void => {
+    if (box.matches(':has(#address:focus-within)')) return
+    const r = box.getBoundingClientRect()
+    if (!r.width) return
+    app.style.setProperty('--grove-urlbar-top', `${r.top}px`)
+    app.style.setProperty('--grove-urlbar-left', `${r.left}px`)
+    app.style.setProperty('--grove-urlbar-width', `${r.width}px`)
+  }
+  // Zen's hint in the floating URL bar.
+  const field = box.querySelector('#address') as (Element & { placeholderText?: string }) | null
+  if (field) field.placeholderText = 'Search...'
+  new ResizeObserver(measure).observe(box)
+  box.addEventListener('pointerdown', measure, true)
+  // Once the bar closes (without a new tab's hold), the next open is in
+  // place again.
+  box.addEventListener('focusout', () =>
+    setTimeout(() => {
+      if (!holding && !searchboxFocused()) {
+        setCentered(false)
+        endNewTabSearch()
+      }
+      measure()
+    }, 0)
+  )
+  measure()
+}
+
+// While a new tab's search is open, Enter and a click on a suggestion open
+// it in a new foreground tab: Chrome's disposition for Ctrl+Shift, which
+// Webium's searchbox reads off the event and passes to the browser.
+function openInNewTabWhileSearching(): void {
+  const redirect = (e: KeyboardEvent | MouseEvent, make: (init: KeyboardEventInit & MouseEventInit) => Event): void => {
+    if (!searchingForNewTab || !inSearchbox(e) || (e.ctrlKey && e.shiftKey)) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    endNewTabSearch(true)
+    const init = { bubbles: true, composed: true, cancelable: true, ctrlKey: true, shiftKey: true }
+    e.composedPath()[0]?.dispatchEvent(make(init))
+  }
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key === 'Enter' && !e.isComposing) {
+        redirect(e, (init) => new KeyboardEvent('keydown', { ...init, key: 'Enter', code: e.code }))
+      }
+    },
+    true
+  )
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (e.button !== 0) return
+      if (!e.composedPath().some((n) => n instanceof Element && n.tagName === 'CR-SEARCHBOX-MATCH')) return
+      redirect(e, (init) => new MouseEvent('click', { ...init, button: 0, clientX: e.clientX, clientY: e.clientY }))
+    },
+    true
+  )
 }

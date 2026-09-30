@@ -32,7 +32,7 @@ import {
   withWorkspace,
   workspaceOfEntry
 } from '../host/model.ts'
-import type { Workspace } from '../shared/types.ts'
+import { isWorkspaceColor, type Workspace } from '../shared/types.ts'
 
 // A workspace with tabs titled by `names`; a leading '*' pins one.
 function ws(...names: string[]): Workspace {
@@ -414,5 +414,15 @@ describe('workspace editing and order', () => {
     expect(placeWorkspace(m, c, a).workspaces.map((w) => w.name)).toEqual(['C', 'Home', 'B'])
     expect(placeWorkspace(m, a).workspaces.map((w) => w.name)).toEqual(['B', 'C', 'Home'])
     expect(placeWorkspace(m, b, b)).toBe(m)
+  })
+})
+
+describe('workspace colors', () => {
+  it('takes a named color or any #rrggbb', () => {
+    expect(isWorkspaceColor('green')).toBe(true)
+    expect(isWorkspaceColor('#4a8fe0')).toBe(true)
+    expect(isWorkspaceColor('#4a8fe')).toBe(false)
+    expect(isWorkspaceColor('teal')).toBe(false)
+    expect(isWorkspaceColor(undefined)).toBe(false)
   })
 })

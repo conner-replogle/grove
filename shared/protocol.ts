@@ -1,7 +1,7 @@
 // What the Grove host and the UI in each window say to each other.
 // The host pushes a WindowState whenever anything a window shows changes;
 // the UI sends HostCommands and keeps no state of its own.
-import type { Color, Group, Section } from './types.ts'
+import type { Group, Section, WorkspaceColor } from './types.ts'
 
 export interface EntryView {
   id: string
@@ -21,7 +21,7 @@ export interface EntryView {
 export interface WorkspaceSummary {
   id: string
   name: string
-  color: Color
+  color: WorkspaceColor
   icon?: string
 }
 
@@ -41,6 +41,8 @@ export type HostCommand =
   | { type: 'hello' }
   | { type: 'activate'; entryId: string }
   | { type: 'close'; entryId: string }
+  // Closes the window's workspace's tabs, all but its pins (Zen's Clear).
+  | { type: 'clearTabs' }
   | { type: 'newTab' }
   | { type: 'setPinned'; entryId: string; pinned: boolean }
   | { type: 'setEssential'; entryId: string; essential: boolean }
@@ -54,8 +56,8 @@ export type HostCommand =
   | { type: 'moveToWorkspace'; entryId: string; workspaceId: string }
   | { type: 'moveWorkspace'; workspaceId: string; beforeId?: string }
   | { type: 'switchWorkspace'; workspaceId: string }
-  | { type: 'newWorkspace'; name?: string; color?: Color; icon?: string }
-  | { type: 'editWorkspace'; workspaceId: string; name?: string; color?: Color; icon?: string }
+  | { type: 'newWorkspace'; name?: string; color?: WorkspaceColor; icon?: string }
+  | { type: 'editWorkspace'; workspaceId: string; name?: string; color?: WorkspaceColor; icon?: string }
   | { type: 'deleteWorkspace'; workspaceId: string }
 
 // The page-side names the launcher installs and calls.

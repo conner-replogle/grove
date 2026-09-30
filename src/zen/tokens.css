@@ -4,13 +4,23 @@
  *
  * Design tokens from Zen Browser (src/zen/common/styles/zen-theme.css,
  * zen-workspaces.css, vertical-tabs.css), resolved for a Chromium WebUI.
- * Set on :host of webui-browser-app; they inherit into Grove's sidebar. */
+ * Set on :host of webui-browser-app; they inherit into Grove's sidebar.
+ *
+ * The window takes its workspace's color, --ws-color (set by theme.ts), as
+ * Zen's workspace themes do (ZenGradientGenerator.mjs, one-color case, on
+ * an opaque window): the background is the color at 40% over a neutral
+ * base, the accent is the color (more saturated and mid-light in light
+ * mode), and the text leans 5% toward it. */
 :host {
   color-scheme: light dark;
-  --zen-primary-color: #7c8cf8;
+  --zen-theme-color: var(--ws-color, #8e8e93);
+  --zen-primary-color: light-dark(
+    hsl(from var(--zen-theme-color) h min(100, s + 30) calc(l * 0.4 + 25.2)),
+    var(--zen-theme-color));
   --zen-branding-bg: light-dark(#e2e2e2, #101010);
   --zen-branding-bg-reverse: light-dark(#101010, #e2e2e2);
-  --toolbox-textcolor: light-dark(rgba(0, 0, 0, 0.9), rgba(255, 255, 255, 0.9));
+  --toolbox-textcolor: color-mix(in srgb,
+    light-dark(rgba(0, 0, 0, 0.9), rgba(255, 255, 255, 0.9)) 95%, var(--zen-theme-color));
 
   --zen-toolbar-element-bg: light-dark(
     color-mix(in oklch, var(--toolbox-textcolor) 8%, transparent),
@@ -29,7 +39,8 @@
   --zen-sidebar-themed-icon-fill: light-dark(
     color-mix(in srgb, var(--zen-primary-color) 50%, black),
     color-mix(in srgb, var(--zen-colors-primary) 15%, #ebebeb));
-  --zen-main-browser-background: light-dark(#e9e9e9, #131313);
+  --zen-main-browser-background: color-mix(in srgb,
+    var(--zen-theme-color) 40%, light-dark(rgb(240, 240, 244), rgb(23, 23, 26)));
   --zen-big-shadow: rgba(0, 0, 0, 0.24) 0px 3px 8px;
   --divider-color: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
 
@@ -43,9 +54,6 @@
   --essential-h: 46px;
   --indicator-h: 44px;
   --card-radius: 8px;
-}
-@supports (color: AccentColor) {
-  :host { --zen-primary-color: AccentColor; }
 }
 
 /* Folder colors (zen-folders.css:15-17), per folder via --folder-accent. */

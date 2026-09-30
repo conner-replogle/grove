@@ -14,8 +14,9 @@ import { send, subscribe } from './host-client'
 import { icons } from './icons'
 import sidebarCss from './styles/sidebar.css'
 import { svg } from './svg'
-import { expectNewTab } from './urlbar'
-import { COLOR_HEX, workspaceEditor, workspaceIcon } from './workspace-editor'
+import { openNewTabSearch } from './urlbar'
+import { applyWorkspaceTheme } from './theme'
+import { COLOR_HEX, colorHex, workspaceEditor, workspaceIcon } from './workspace-editor'
 import folderSvg from './zen/folder-icon.svg'
 import zenTokens from './zen/tokens.css'
 
@@ -79,9 +80,11 @@ class GroveSidebar extends HTMLElement {
       scroll.append(grid)
     }
 
+    const app = (this.getRootNode() as ShadowRoot).host
+    if (app) applyWorkspaceTheme(app, colorHex(ws.color))
+
     const indicator = el('div', 'workspace-indicator')
     indicator.dataset.kind = 'pins-start'
-    indicator.style.setProperty('--ws-color', COLOR_HEX[ws.color])
     const wsIcon = el('span', 'icon')
     wsIcon.append(workspaceIcon(ws.icon))
     indicator.append(wsIcon, el('span', 'name', ws.name))
@@ -93,22 +96,32 @@ class GroveSidebar extends HTMLElement {
     scroll.append(indicator)
 
     const pinned = ws.entries.filter((e) => e.pinned)
+    const tabs = ws.entries.filter((e) => !e.pinned)
     for (const e of pinned) scroll.append(this.tabRow(e, s, 'pinned'))
+    // Zen's separator, with its Clear button: closes the workspace's tabs,
+    // all but its pins.
     const sep = el('div', 'pinned-separator')
     sep.dataset.kind = 'tabs-start'
-    sep.classList.toggle('empty', !pinned.length)
+    sep.classList.toggle('empty', !pinned.length && !tabs.length)
+    sep.append(el('span', 'line'))
+    if (tabs.length) {
+      const clear = el('button', 'clear')
+      clear.title = 'Close all unpinned tabs'
+      clear.append(svg(icons.arrowDown), el('span', '', 'Clear'))
+      clear.addEventListener('pointerdown', (ev) => ev.stopPropagation())
+      clear.addEventListener('click', () => send({ type: 'clearTabs' }))
+      sep.append(clear)
+    }
     scroll.append(sep)
 
     const newTab = el('button', 'new-tab')
     newTab.dataset.kind = 'tabs-start'
     newTab.append(iconEl('favicon icon', icons.plus), el('span', 'label', 'New Tab'))
     newTab.addEventListener('click', () => {
-      expectNewTab()
-      send({ type: 'newTab' })
+      openNewTabSearch()
     })
     scroll.append(newTab)
 
-    const tabs = ws.entries.filter((e) => !e.pinned)
     const seen = new Set<string>()
     for (const e of tabs) {
       if (!e.groupId) scroll.append(this.tabRow(e, s, 'tabs'))
@@ -204,7 +217,7 @@ class GroveSidebar extends HTMLElement {
       const active = w.id === s.workspace.id
       const b = el('button', active ? 'active' : '')
       b.title = w.name
-      b.style.color = active ? COLOR_HEX[w.color] : ''
+      b.style.setProperty('--ws-color', colorHex(w.color))
       b.dataset.kind = 'workspace'
       b.dataset.workspace = w.id
       b.append(workspaceIcon(w.icon))

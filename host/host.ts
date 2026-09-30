@@ -39,6 +39,9 @@ export interface UiSink {
   push(windowId: number, state: WindowState): void
   // Opens the window's URL bar with keyboard focus, as Ctrl+L does.
   focusUrlBar(windowId: number): void
+  // Opens the window's URL bar as a new tab's search, as Zen does: no tab
+  // until a result is picked, which then opens in a new tab.
+  openNewTabSearch(windowId: number): void
 }
 
 interface Binding {
@@ -172,12 +175,24 @@ export class GroveHost {
       this.queuePush()
       return
     }
+    // A new tab of the user's own (Ctrl+T): as with New Tab, there's no tab
+    // until the search opens one, so this one goes and the search opens.
+    // (A window's only tab stays: something has to show.)
+    if (tab.active && isNewTabPage(tab.url) && this.tabsIn(tab.windowId).length > 1) {
+      this.ui.openNewTabSearch(tab.windowId)
+      // Back to the page the window showed, then close the new tab: closing
+      // it while Chrome is still making it crashes Webium.
+      const back = this.bindWindow(tab.windowId).activeEntryId
+      const backTab = back ? this.tabOf.get(back) : undefined
+      if (backTab !== undefined) void this.bridge!.call('activate', backTab).catch(() => {})
+      setTimeout(() => void this.closeTabs([tab.id]), 500)
+      return
+    }
     // A tab the user or a page opened: a new entry in that window's workspace,
     // next to the tab that opened it.
     const entry = this.adoptTab(tab)
     const b = this.bindWindow(tab.windowId)
     if (tab.active) this.setActive(tab.windowId, b, entry.id)
-    // A new tab of the user's own (Ctrl+T) opens the URL bar, as New Tab does.
     if (tab.active && isNewTabPage(tab.url)) this.ui.focusUrlBar(tab.windowId)
     this.queuePush()
   }
@@ -250,7 +265,11 @@ export class GroveHost {
       case 'activate':
         return this.activateIn(windowId, c.entryId)
       case 'close':
-        return this.closeEntryEverywhere(c.entryId)
+        return this.closeEntriesEverywhere([c.entryId])
+      case 'clearTabs': {
+        const ws = M.getWorkspace(this.model, b.workspaceId)
+        return this.closeEntriesEverywhere(ws.entries.filter((e) => !e.pinned).map((e) => e.id))
+      }
       case 'newTab':
         return this.newTab(windowId)
       case 'setPinned':
@@ -380,15 +399,19 @@ export class GroveHost {
     this.pushAll()
   }
 
-  private async closeEntryEverywhere(entryId: string): Promise<void> {
-    const tabId = this.tabOf.get(entryId)
-    const affected = [...this.windows].filter(([, b]) => b.activeEntryId === entryId).map(([id]) => id)
-    this.closeEntries([entryId])
-    if (tabId !== undefined) {
-      const windowId = this.tabWindow.get(tabId)!
-      await this.keepWindowOpen(windowId, [tabId])
-      await this.closeTabs([tabId])
+  private async closeEntriesEverywhere(entryIds: string[]): Promise<void> {
+    if (!entryIds.length) return
+    const ids = new Set(entryIds)
+    const affected = [...this.windows].filter(([, b]) => b.activeEntryId && ids.has(b.activeEntryId)).map(([id]) => id)
+    const tabs = entryIds.map((id) => this.tabOf.get(id)).filter((t) => t !== undefined)
+    this.closeEntries(entryIds)
+    const byWindow = new Map<number, number[]>()
+    for (const t of tabs) {
+      const w = this.tabWindow.get(t)!
+      byWindow.set(w, [...(byWindow.get(w) ?? []), t])
     }
+    for (const [windowId, windowTabs] of byWindow) await this.keepWindowOpen(windowId, windowTabs)
+    await this.closeTabs(tabs)
     for (const w of affected) await this.afterLoss(w)
     this.pushAll()
   }

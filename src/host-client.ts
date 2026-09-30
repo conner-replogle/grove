@@ -7,10 +7,17 @@ type Listener = (state: WindowState) => void
 
 const listeners = new Set<Listener>()
 const urlBarListeners = new Set<() => void>()
+const newTabSearchListeners = new Set<() => void>()
 
 // Calls `fn` when the host asks this window to open its URL bar (a new tab).
 export function onFocusUrlBar(fn: () => void): void {
   urlBarListeners.add(fn)
+}
+
+// Calls `fn` when the host asks this window to open a new tab's search
+// (Ctrl+T).
+export function onOpenNewTabSearch(fn: () => void): void {
+  newTabSearchListeners.add(fn)
 }
 let last: WindowState | undefined
 
@@ -21,6 +28,9 @@ let last: WindowState | undefined
   },
   focusUrlBar() {
     urlBarListeners.forEach((l) => l())
+  },
+  openNewTabSearch() {
+    newTabSearchListeners.forEach((l) => l())
   }
 }
 

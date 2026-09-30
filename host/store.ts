@@ -4,7 +4,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { COLORS, type Entry, type Model, type Workspace } from '../shared/types.ts'
+import { COLORS, isWorkspaceColor, type Color, type Entry, type Model, type Workspace } from '../shared/types.ts'
 import { emptyModel, normalize } from './model.ts'
 
 const SAVE_DELAY_MS = 500
@@ -117,7 +117,7 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
   return normalize({
     id: raw.id,
     name: isString(raw.name) && raw.name ? raw.name : 'Workspace',
-    color: color(raw.color),
+    color: isWorkspaceColor(raw.color) ? raw.color : 'gray',
     ...(isString(raw.icon) && raw.icon ? { icon: raw.icon } : {}),
     entries,
     groups,
@@ -151,8 +151,8 @@ function parseEntry(raw: unknown): Entry | undefined {
   }
 }
 
-function color(raw: unknown): Workspace['color'] {
-  return COLORS.includes(raw as Workspace['color']) ? (raw as Workspace['color']) : 'gray'
+function color(raw: unknown): Color {
+  return COLORS.includes(raw as Color) ? (raw as Color) : 'gray'
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

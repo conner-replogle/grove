@@ -132,6 +132,11 @@ const host = new GroveHost(
       const sessionId = sessionOfWindow(windowId)
       if (!sessionId) return
       cdp.send('Runtime.evaluate', { expression: `window.${UI_RECEIVER}?.focusUrlBar()` }, sessionId).catch(() => {})
+    },
+    openNewTabSearch(windowId) {
+      const sessionId = sessionOfWindow(windowId)
+      if (!sessionId) return
+      cdp.send('Runtime.evaluate', { expression: `window.${UI_RECEIVER}?.openNewTabSearch()` }, sessionId).catch(() => {})
     }
   },
   log
@@ -342,9 +347,11 @@ if (dev) {
   createServer(async (req, res) => {
     let body = ''
     for await (const chunk of req) body += chunk
-    // /cdp takes {method, params, sessionId?} and sends it as is.
+    // /cdp takes {method, params, sessionId?} and sends it as is;
+    // sessionId "ui" means the first window's UI.
     if (req.url?.includes('cdp')) {
-      const { method, params, sessionId } = JSON.parse(body)
+      const { method, params, sessionId: given } = JSON.parse(body)
+      const sessionId = given === 'ui' ? uiSessions.keys().next().value : given
       const r = await cdp.send(method, params ?? {}, sessionId).catch((e) => ({ error: e.message }))
       res.end(JSON.stringify(r, null, 1) + '\n')
       return

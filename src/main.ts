@@ -4,12 +4,12 @@
 import appCss from './styles/app.css'
 import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
-import urlbarResultsCss from './styles/urlbar-results.css'
+import urlbarResultsCss from './zen/urlbar-results.css'
 import { addStyles, patchMethod } from './patch'
 import { anchorExtensionsBar } from './extensions-anchor'
 import { showPausedPages } from './paused'
 import { sidebarResizer } from './resize'
-import { openUrlBarOnNewTab, releasePageFocus } from './urlbar'
+import { openUrlBarOnNewTab, releasePageFocus, watchUrlBarPlace } from './urlbar'
 import './sidebar'
 
 declare global {
@@ -71,7 +71,11 @@ function keepSidebarMounted(): void {
     resizer ??= sidebarResizer(app)
     if (resizer.parentNode !== grid) grid.append(resizer)
     // The extensions button lives inside the URL bar, as in Zen.
-    const box = root.querySelector('#addressBox')
+    const box = root.querySelector<HTMLElement>('#addressBox')
+    if (box && !anchored.has(box)) {
+      anchored.add(box)
+      watchUrlBarPlace(box)
+    }
     const extensions = root.querySelector('#extensionsBar')
     if (box && extensions && extensions.parentNode !== box) box.append(extensions)
     if (extensions?.shadowRoot?.querySelector('#extensionsMenuButton') && !anchored.has(extensions)) {

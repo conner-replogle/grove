@@ -2,7 +2,7 @@
 // model or workspace and never mutates its input, so the service can diff,
 // the store can save snapshots and the tests need no Electron.
 import { randomUUID } from 'node:crypto'
-import { COLORS, type Color, type Entry, type Group, type Model, type MoveTarget, type Section, type Workspace } from '../shared/types.ts'
+import { COLORS, type Color, type Entry, type Group, type Model, type MoveTarget, type Section, type Workspace, type WorkspaceColor } from '../shared/types.ts'
 
 export const newId = (): string => randomUUID()
 
@@ -13,7 +13,7 @@ export function emptyModel(): Model {
   return { version: 1, workspaces: [home], essentials: [], lastActiveWorkspaceId: home.id }
 }
 
-function newWorkspace(name: string, color: Color): Workspace {
+function newWorkspace(name: string, color: WorkspaceColor): Workspace {
   return { id: newId(), name, color, entries: [], groups: [] }
 }
 
@@ -32,11 +32,11 @@ export function withWorkspace(model: Model, id: string, fn: (ws: Workspace) => W
   }
 }
 
-function nextColor(used: Color[]): Color {
+function nextColor(used: string[]): Color {
   return COLORS.find((c) => !used.includes(c)) ?? COLORS[used.length % COLORS.length]
 }
 
-export function createWorkspace(model: Model, name?: string, color?: Color, icon?: string): [Model, string] {
+export function createWorkspace(model: Model, name?: string, color?: WorkspaceColor, icon?: string): [Model, string] {
   const ws = newWorkspace(
     name?.trim() || `Workspace ${model.workspaces.length + 1}`,
     color ?? nextColor(model.workspaces.map((w) => w.color))
@@ -47,7 +47,7 @@ export function createWorkspace(model: Model, name?: string, color?: Color, icon
 
 export interface WorkspacePatch {
   name?: string
-  color?: Color
+  color?: WorkspaceColor
   icon?: string
 }
 
@@ -72,7 +72,7 @@ export function renameWorkspace(model: Model, id: string, name: string): Model {
   return withWorkspace(model, id, (ws) => ({ ...ws, name: trimmed }))
 }
 
-export function recolorWorkspace(model: Model, id: string, color: Color): Model {
+export function recolorWorkspace(model: Model, id: string, color: WorkspaceColor): Model {
   return withWorkspace(model, id, (ws) => ({ ...ws, color }))
 }
 

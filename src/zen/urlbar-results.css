@@ -1,0 +1,74 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Chrome's suggestion rows (cr-searchbox-match) drawn as Zen draws its URL
+ * bar results: zen-omnibox.css (.urlbarView-row, .urlbarView-title,
+ * .urlbarView-url, .urlbarView-favicon), resolved for a Chromium WebUI.
+ * Tokens (--zen-primary-color, --zen-branding-bg-reverse) inherit from
+ * webui-browser-app. */
+:host {
+  color: light-dark(rgba(0, 0, 0, 0.7), rgba(255, 255, 255, 0.7));
+}
+.container:not(.actions) {
+  box-sizing: border-box;
+  min-height: 52px;
+  margin: 0 !important;
+  padding-block: 12px !important;
+  padding-inline: 8px !important;
+  border-block: 2px solid transparent;
+  border-radius: 8px !important;
+}
+.container:not(.actions):hover {
+  background-color: color-mix(in srgb, var(--zen-branding-bg-reverse) 5%, transparent 95%) !important;
+}
+:host([selected]) .container:not(.actions) {
+  background-color: color-mix(in srgb, var(--zen-primary-color) 50%,
+    light-dark(rgba(0, 0, 0, 0.3), rgba(255, 255, 255, 0.1))) !important;
+}
+:host([selected]) .container:not(.actions),
+:host([selected]) .container:not(.actions) * {
+  color: white !important;
+}
+#focusIndicator { display: none !important; }
+
+/* .urlbarView-favicon: 12px before the text, a 4px pad that takes the
+ * hover tint. */
+#icon {
+  --cr-searchbox-icon-container-size: 16px;
+  --cr-searchbox-icon-border-radius: 4px;
+  flex: none;
+  padding: 4px;
+  margin-inline: 0 !important;
+  border-radius: 4px;
+}
+.container:not(.actions):hover #icon {
+  background-color: color-mix(in srgb, var(--zen-branding-bg-reverse) 5%, transparent 95%);
+}
+#text-container {
+  padding-inline-start: 12px !important;
+  line-height: 20px;
+}
+/* .urlbarView-title, then .urlbarView-url and its separator. */
+#contents {
+  font-size: 14px;
+  font-weight: 500;
+}
+#description,
+#description .dim,
+#separator {
+  font-size: 14px;
+  font-weight: 500;
+  color: light-dark(#4f4f4f, #aaa);
+}
+:host([is-rich-suggestion]) #description { font-size: 13px; }
+/* Chrome writes a hyphen between title and description; Firefox an em
+ * dash (.urlbarView-title-separator::before). */
+#separator { font-size: 0 !important; }
+#separator:not(:empty)::before {
+  content: '\2014';
+  margin-inline: 0.4em;
+  font-size: 14px;
+}
+/* Entity suggestions keep Chrome's picture, at Zen's row height. */
+:host([has-image]) #icon { --cr-searchbox-icon-container-size: 28px; padding: 0; }
