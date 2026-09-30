@@ -24,18 +24,18 @@ export function addStyles(tag: string, css: string): void {
   })
 }
 
-// Replaces a method on a custom element's prototype. `impl` receives the
-// original, bound to the instance.
-export function patchMethod<T extends unknown[], R>(
+// Replaces a method on a custom element's prototype. `impl` is called on
+// the instance and receives the original, bound to it.
+export function patchMethod<T extends unknown[], R, E extends Element = Element>(
   tag: string,
   name: string,
-  impl: (original: (...args: T) => R, ...args: T) => R
+  impl: (this: E, original: (...args: T) => R, ...args: T) => R
 ): void {
   whenDefined(tag, (ctor) => {
     const proto = ctor.prototype as Record<string, (...args: T) => R>
     const original = proto[name]
-    proto[name] = function (this: unknown, ...args: T) {
-      return impl(original.bind(this) as (...args: T) => R, ...args)
+    proto[name] = function (this: E, ...args: T) {
+      return impl.call(this, original.bind(this) as (...args: T) => R, ...args)
     }
   })
 }

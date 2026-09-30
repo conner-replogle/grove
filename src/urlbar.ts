@@ -11,6 +11,7 @@
 // afterwards doesn't take it back, so typing would go to the page. So for a
 // New Tab page the <embed> isn't focused; the URL bar is, and the page gets
 // the keyboard once the URL bar closes.
+import { addressText } from './address'
 import { onFocusUrlBar, onOpenNewTabSearch } from './host-client'
 
 let holding = false
@@ -33,11 +34,9 @@ let addressBefore = ''
 type SearchboxField = Element & { setInputText?(t: string): void }
 const searchboxField = (): SearchboxField | null =>
   document.querySelector('webui-browser-app')?.shadowRoot?.querySelector('#address') ?? null
-const fieldText = (): string =>
-  searchboxField()?.shadowRoot?.querySelector('#input')?.shadowRoot?.querySelector('input')?.value ?? ''
 
 export function openNewTabSearch(): void {
-  if (!searchingForNewTab) addressBefore = fieldText()
+  if (!searchingForNewTab) addressBefore = addressText()
   searchingForNewTab = true
   setCentered(true)
   focusField()

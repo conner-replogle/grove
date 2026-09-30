@@ -6,6 +6,7 @@ import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
 import urlbarResultsCss from './zen/urlbar-results.css'
 import { addStyles, patchMethod } from './patch'
+import { showDomainOnly } from './address'
 import { anchorExtensionsBar } from './extensions-anchor'
 import { showPausedPages } from './paused'
 import { sidebarResizer } from './resize'
@@ -24,6 +25,7 @@ if (!window.__grove) {
   addStyles('webui-browser-app', zenTokens + appCss)
   addStyles('webui-browser-searchbox', searchboxCss)
   addStyles('cr-searchbox-match', urlbarResultsCss)
+  showDomainOnly()
   closeUrlBarAfterUse()
   openUrlBarOnNewTab()
 
