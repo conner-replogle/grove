@@ -18,6 +18,7 @@
 //                  restores and mirrors tabs itself and fights this host)
 //   GROVE_PROFILE  the profile directory  (default ~/.config/grove-webium)
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
@@ -32,9 +33,9 @@ const CHROME = process.env.GROVE_CHROME ?? '/usr/bin/chromium'
 const PROFILE = process.env.GROVE_PROFILE ?? `${home}/.config/grove-webium`
 const FEATURES = 'Webium,SurfaceEmbed,ExtensionsMenuAccessControl'
 const BUNDLE = fileURLToPath(new URL('../dist/grove-ui.js', import.meta.url))
-const EXTENSION = fileURLToPath(new URL('../extension', import.meta.url))
+const EXTENSION_SOURCE = fileURLToPath(new URL('../extension', import.meta.url))
 const UI_URL = 'chrome://webui-browser'
-const BRIDGE_SCRIPT = '/grove-bridge.js'
+const BRIDGE_SCRIPT = /\/grove-bridge\.[0-9a-f]+\.js$/
 
 const dev = process.argv.includes('--dev')
 // URLs and Chrome flags (--new-window, ...) go on to Chrome.
@@ -58,6 +59,26 @@ if (runningPid()) {
   const handoff = spawn(CHROME, [`--user-data-dir=${PROFILE}`, ...passArgs], { stdio: 'ignore' })
   await new Promise((done) => handoff.on('exit', done))
   process.exit(0)
+}
+
+// The bridge extension, written into the profile with its service worker
+// named after its contents and a version to match. Chrome registers an
+// extension's worker again only when the extension's version changes, and
+// otherwise keeps running the script it registered before, even once the
+// file changes. The folder stays put, so the extension keeps its id.
+function prepareBridge() {
+  const dir = join(PROFILE, 'Grove Bridge')
+  const script = readFileSync(join(EXTENSION_SOURCE, 'grove-bridge.js'))
+  const hash = createHash('sha256').update(script).digest()
+  const name = `grove-bridge.${hash.toString('hex').slice(0, 12)}.js`
+  const manifest = JSON.parse(readFileSync(join(EXTENSION_SOURCE, 'manifest.json'), 'utf8'))
+  manifest.version = `${manifest.version}.${hash.readUInt16BE(0)}`
+  manifest.background.service_worker = name
+  rmSync(dir, { recursive: true, force: true })
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, name), script)
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2))
+  return dir
 }
 
 // Grove's host restores the workspaces, so Chrome must not also restore its
@@ -88,6 +109,7 @@ function prepareProfile() {
   writeFileSync(file, JSON.stringify(prefs))
 }
 prepareProfile()
+const EXTENSION = prepareBridge()
 
 const chrome = spawn(
   CHROME,
@@ -255,7 +277,7 @@ cdp.on('Target.attachedToTarget', async ({ sessionId, targetInfo, waitingForDebu
           cdp.send('Target.attachToTarget', { targetId: targetInfo.targetId, flatten: true }).catch(() => {})
         }, 1000)
       }
-    } else if (targetInfo.type === 'service_worker' && targetInfo.url.endsWith(BRIDGE_SCRIPT)) {
+    } else if (targetInfo.type === 'service_worker' && BRIDGE_SCRIPT.test(targetInfo.url)) {
       await attachBridge(sessionId, waitingForDebugger)
     } else if (waitingForDebugger) {
       await cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId)
@@ -348,10 +370,11 @@ if (dev) {
     let body = ''
     for await (const chunk of req) body += chunk
     // /cdp takes {method, params, sessionId?} and sends it as is;
-    // sessionId "ui" means the first window's UI.
+    // sessionId "ui" means the first window's UI, "ui2" the second, and so on.
     if (req.url?.includes('cdp')) {
       const { method, params, sessionId: given } = JSON.parse(body)
-      const sessionId = given === 'ui' ? uiSessions.keys().next().value : given
+      const nth = /^ui(\d*)$/.exec(given ?? '')
+      const sessionId = nth ? [...uiSessions.keys()][Number(nth[1] || 1) - 1] : given
       const r = await cdp.send(method, params ?? {}, sessionId).catch((e) => ({ error: e.message }))
       res.end(JSON.stringify(r, null, 1) + '\n')
       return

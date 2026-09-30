@@ -65,6 +65,9 @@ export class GroveHost {
   // Tabs Grove is closing itself (unload, close); their removal isn't a user close.
   private readonly closingByHost = new Set<number>()
   private readonly loading = new Set<number>()
+  // Tabs shown as loading get their state re-read from Chrome now and then,
+  // so a missed "complete" can't leave one spinning for good.
+  private readonly loadingChecks = new Map<number, ReturnType<typeof setInterval>>()
   // Tabs Grove asked the bridge to create: request id -> what they are for.
   private readonly requests = new Map<string, { entryId?: string; placeholder?: boolean }>()
   private nextRequest = 1
@@ -217,7 +220,7 @@ export class GroveHost {
     const windowId = this.tabWindow.get(tabId)
     this.tabWindow.delete(tabId)
     this.placeholders.delete(tabId)
-    this.loading.delete(tabId)
+    this.stopLoading(tabId)
     const entryId = this.entryOf.get(tabId)
     if (entryId) this.unmap(entryId)
     if (this.closingByHost.delete(tabId) || !entryId) return this.queuePush()
@@ -230,10 +233,10 @@ export class GroveHost {
   }
 
   private onTabUpdated(tab: BridgeTab): void {
-    if (tab.status === 'loading') this.loading.add(tab.id)
-    else this.loading.delete(tab.id)
+    if (tab.status === 'loading') this.startLoading(tab.id)
+    else this.stopLoading(tab.id)
     const entryId = this.entryOf.get(tab.id)
-    if (!entryId) return
+    if (!entryId) return this.queuePush()
     this.update((m) =>
       M.editEntry(m, entryId, (e) => ({
         ...e,
@@ -242,6 +245,28 @@ export class GroveHost {
         favicon: tab.favIconUrl || e.favicon
       }))
     )
+  }
+
+  private startLoading(tabId: number): void {
+    this.loading.add(tabId)
+    if (this.loadingChecks.has(tabId)) return
+    const check = setInterval(() => {
+      void this.bridge
+        ?.call<BridgeTab | null>('get', tabId)
+        .then((tab) => {
+          if (!tab) this.stopLoading(tabId)
+          else if (tab.status !== 'loading') this.onTabUpdated(tab)
+          this.queuePush()
+        })
+        .catch(() => {})
+    }, 5000)
+    this.loadingChecks.set(tabId, check)
+  }
+
+  private stopLoading(tabId: number): void {
+    this.loading.delete(tabId)
+    clearInterval(this.loadingChecks.get(tabId))
+    this.loadingChecks.delete(tabId)
   }
 
   private onTabActivated(tabId: number, windowId: number): void {

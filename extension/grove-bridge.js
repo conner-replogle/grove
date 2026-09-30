@@ -80,6 +80,14 @@ globalThis.grove = {
       return null
     }
   },
+  // A tab as Chrome has it now, or null once it's gone.
+  async get(tabId) {
+    try {
+      return tabInfo(await chrome.tabs.get(tabId))
+    } catch {
+      return null
+    }
+  },
   async remove(tabIds) {
     await chrome.tabs.remove(tabIds)
   },
