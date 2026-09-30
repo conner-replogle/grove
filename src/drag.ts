@@ -1,16 +1,21 @@
-// Drag and drop in the sidebar. A press on a tab, an Essential or a folder
-// header becomes a drag once the pointer moves a few pixels; the drop asks
-// the host to move the entry (or the whole folder), and every window on the
-// workspace redraws from the host's model.
+// Drag and drop in the sidebar. A press on a tab, an Essential, a folder
+// header or a workspace icon becomes a drag once the pointer moves a few
+// pixels; the drop asks the host to move it, and every window redraws from
+// the host's model.
 //
 // Rows carry what the drop needs to know:
-//   data-kind   'essential' | 'tab' | 'folder' | 'top' (above the tab list)
-//   data-entry  the entry id (tabs and Essentials)
-//   data-group  the folder id (folder headers, and tabs inside a folder)
+//   data-kind     'essential' | 'tab' | 'folder' | 'workspace'
+//                 | 'pins-start' (the workspace name: the top of its pins)
+//                 | 'tabs-start' (the separator and New Tab: the top of its tabs)
+//   data-entry    the entry id (tabs and Essentials)
+//   data-section  'pinned' | 'tabs' (tabs)
+//   data-group    the folder id (folder headers, and tabs inside a folder)
+//   data-workspace  the workspace id (workspace icons)
 import type { EntryView, HostCommand, WindowState } from '../shared/protocol.ts'
 import { send } from './host-client'
 
-type Source = { entryId: string } | { groupId: string }
+type Source = { entryId: string } | { groupId: string } | { workspaceId: string }
+type MoveEntry = Extract<HostCommand, { type: 'moveEntry' }>
 type Where = 'before' | 'after' | 'into'
 
 interface Target {
@@ -89,7 +94,11 @@ export class Dragger {
         this.press_ = undefined
         return
       }
-      this.host.setPointerCapture(e.pointerId)
+      try {
+        this.host.setPointerCapture(e.pointerId)
+      } catch {
+        // A pointer the browser doesn't track (synthetic events): no capture.
+      }
     }
     this.ghost!.style.translate = `${e.clientX - this.grab.x}px ${e.clientY - this.grab.y}px`
     this.toggleZone(e.clientY)
@@ -122,7 +131,7 @@ export class Dragger {
     if ('entryId' in source && scroll && !this.root.querySelector('.essentials')) {
       const zone = document.createElement('div')
       zone.className = 'essentials empty-zone'
-      zone.textContent = 'Drop to pin'
+      zone.textContent = 'Add to Essentials'
       scroll.prepend(zone)
       this.zone = zone
     }
@@ -162,9 +171,9 @@ export class Dragger {
   }
 
   private sourceNode(source: Source): HTMLElement | null {
-    return 'entryId' in source
-      ? this.root.querySelector(`[data-entry="${CSS.escape(source.entryId)}"]`)
-      : this.root.querySelector(`[data-kind="folder"][data-group="${CSS.escape(source.groupId)}"]`)
+    if ('entryId' in source) return this.root.querySelector(`[data-entry="${CSS.escape(source.entryId)}"]`)
+    if ('groupId' in source) return this.root.querySelector(`[data-kind="folder"][data-group="${CSS.escape(source.groupId)}"]`)
+    return this.root.querySelector(`[data-kind="workspace"][data-workspace="${CSS.escape(source.workspaceId)}"]`)
   }
 
   // ---- Where a drop at (x, y) lands ----
@@ -177,26 +186,36 @@ export class Dragger {
     if (x < box.left || x > box.right || y < box.top || y > box.bottom) return undefined
     const hit = this.root.elementFromPoint(x, y)
     const node = hit?.closest<HTMLElement>('[data-kind]') ?? null
-    const scroll = this.root.querySelector<HTMLElement>('.scroll')
+    if ('workspaceId' in source) return this.workspaceTarget(source.workspaceId, node, x, s)
+    if ('groupId' in source) return this.folderTarget(source.groupId, node, y, s, hit)
+    return this.entryTarget(source.entryId, node, x, y, s, hit)
+  }
+
+  private entryTarget(
+    entryId: string,
+    node: HTMLElement | null,
+    x: number,
+    y: number,
+    s: WindowState,
+    hit: Element | null
+  ): Target | undefined {
     const entries = s.workspace.entries
-    const unpinned = entries.filter((e) => !e.pinned)
-
-    if ('groupId' in source) return this.folderTarget(source.groupId, node, y, unpinned, scroll, hit)
-
-    const entryId = source.entryId
-    const move = (where: Where, n: HTMLElement, rest: Omit<Extract<HostCommand, { type: 'moveEntry' }>, 'type' | 'entryId'>): Target => ({
+    const pinned = entries.filter((e) => e.pinned)
+    const tabs = entries.filter((e) => !e.pinned)
+    const move = (where: Where, n: HTMLElement, drop: Omit<MoveEntry, 'type' | 'entryId'>): Target => ({
       node: n,
       where,
-      command: { type: 'moveEntry', entryId, ...rest }
+      command: { type: 'moveEntry', entryId, ...drop }
     })
+    const firstOther = (list: EntryView[]): string | undefined => list.find((e) => e.id !== entryId)?.id
 
     if (!node) {
-      // Empty space: below the list, or the Essentials grid's gaps.
+      // Empty space: the Essentials grid's gaps, or below the list.
       const grid = hit?.closest<HTMLElement>('.essentials')
-      if (grid) return move('into', grid, { pinned: true })
-      if (hit === scroll || hit === this.host) {
-        const last = [...this.root.querySelectorAll<HTMLElement>('.scroll > [data-kind="tab"], .scroll > .folder')].at(-1)
-        return last ? move('after', last, { pinned: false }) : undefined
+      if (grid) return move('into', grid, { section: 'essentials' })
+      if (hit === this.root.querySelector('.scroll') || hit === this.host) {
+        const last = this.lastListItem()
+        return last ? move('after', last, { section: 'tabs' }) : undefined
       }
       return undefined
     }
@@ -205,59 +224,77 @@ export class Dragger {
       case 'essential': {
         const id = node.dataset.entry!
         if (id === entryId) return undefined
-        const pinned = entries.filter((e) => e.pinned)
         const before = x < r.left + r.width / 2
-        const beforeId = before ? id : next(pinned, id, entryId)
-        return move(before ? 'before' : 'after', node, { pinned: true, beforeId })
+        const beforeId = before ? id : next(s.essentials, id, entryId)
+        return move(before ? 'before' : 'after', node, { section: 'essentials', beforeId })
       }
       case 'tab': {
         const id = node.dataset.entry!
         if (id === entryId) return undefined
+        const section = node.dataset.section === 'pinned' ? 'pinned' : 'tabs'
         const groupId = node.dataset.group
         const before = y < r.top + r.height / 2
-        const section = groupId ? unpinned.filter((e) => e.groupId === groupId) : unpinned
-        const beforeId = before ? id : groupId ? next(section, id, entryId) : nextTopLevel(unpinned, id, entryId)
-        return move(before ? 'before' : 'after', node, { pinned: false, groupId, beforeId })
+        let beforeId: string | undefined = id
+        if (!before) {
+          if (section === 'pinned') beforeId = next(pinned, id, entryId)
+          else if (groupId) beforeId = next(tabs.filter((e) => e.groupId === groupId), id, entryId)
+          else beforeId = nextTopLevel(tabs, id, entryId)
+        }
+        return move(before ? 'before' : 'after', node, { section, groupId, beforeId })
       }
       case 'folder': {
         const groupId = node.dataset.group!
-        const members = unpinned.filter((e) => e.groupId === groupId)
+        const members = tabs.filter((e) => e.groupId === groupId)
         if (y < r.top + r.height * 0.3) {
-          const beforeId = members.find((m) => m.id !== entryId)?.id ?? nextTopLevel(unpinned, members[0]?.id, entryId)
-          return move('before', node.parentElement!, { pinned: false, beforeId })
+          const beforeId = firstOther(members) ?? nextTopLevel(tabs, members[0]?.id, entryId)
+          return move('before', node.parentElement!, { section: 'tabs', beforeId })
         }
-        return move('into', node, { pinned: false, groupId })
+        return move('into', node, { section: 'tabs', groupId })
       }
-      case 'top':
-        return move('before', this.firstListItem() ?? node, {
-          pinned: false,
-          beforeId: unpinned.find((e) => e.id !== entryId)?.id
-        })
+      case 'pins-start':
+        return move('after', node, { section: 'pinned', beforeId: firstOther(pinned) })
+      case 'tabs-start':
+        return move('after', node, { section: 'tabs', beforeId: firstOther(tabs) })
+      case 'workspace': {
+        const workspaceId = node.dataset.workspace!
+        if (workspaceId === s.workspace.id) return undefined
+        return { node, where: 'into', command: { type: 'moveToWorkspace', entryId, workspaceId } }
+      }
     }
     return undefined
+  }
+
+  private workspaceTarget(workspaceId: string, node: HTMLElement | null, x: number, s: WindowState): Target | undefined {
+    if (node?.dataset.kind !== 'workspace') return undefined
+    const id = node.dataset.workspace!
+    if (id === workspaceId) return undefined
+    const r = node.getBoundingClientRect()
+    const before = x < r.left + r.width / 2
+    const ids = s.workspaces.map((w) => w.id)
+    const beforeId = before ? id : ids.slice(ids.indexOf(id) + 1).find((w) => w !== workspaceId)
+    return { node, where: before ? 'before' : 'after', command: { type: 'moveWorkspace', workspaceId, beforeId } }
   }
 
   private folderTarget(
     groupId: string,
     node: HTMLElement | null,
     y: number,
-    unpinned: EntryView[],
-    scroll: HTMLElement | null,
+    s: WindowState,
     hit: Element | null
   ): Target | undefined {
+    const tabs = s.workspace.entries.filter((e) => !e.pinned)
     const move = (where: Where, n: HTMLElement, beforeId?: string): Target => ({
       node: n,
       where,
       command: { type: 'moveFolder', groupId, beforeId }
     })
     if (!node) {
-      if (hit !== scroll && hit !== this.host) return undefined
-      const last = [...this.root.querySelectorAll<HTMLElement>('.scroll > [data-kind="tab"], .scroll > .folder')].at(-1)
+      if (hit !== this.root.querySelector('.scroll') && hit !== this.host) return undefined
+      const last = this.lastListItem()
       return last ? move('after', last) : undefined
     }
-    if (node.dataset.kind === 'top') {
-      return move('before', this.firstListItem() ?? node, unpinned[0]?.id)
-    }
+    if (node.dataset.kind === 'tabs-start') return move('after', node, tabs[0]?.id)
+    if (node.dataset.kind === 'tab' && node.dataset.section === 'pinned') return undefined
     if (node.dataset.kind !== 'tab' && node.dataset.kind !== 'folder') return undefined
     // Inside a folder, the anchor is the folder as a whole.
     const anchorGroup = node.dataset.group
@@ -265,14 +302,14 @@ export class Dragger {
     if (anchorGroup === groupId) return undefined
     const r = anchor.getBoundingClientRect()
     const before = y < r.top + r.height / 2
-    const firstId = anchorGroup ? unpinned.find((e) => e.groupId === anchorGroup)?.id : node.dataset.entry
+    const firstId = anchorGroup ? tabs.find((e) => e.groupId === anchorGroup)?.id : node.dataset.entry
     if (before) return move('before', anchor, firstId)
-    const lastId = anchorGroup ? unpinned.findLast((e) => e.groupId === anchorGroup)?.id : node.dataset.entry
-    return move('after', anchor, lastId && nextTopLevel(unpinned, lastId, undefined, groupId))
+    const lastId = anchorGroup ? tabs.findLast((e) => e.groupId === anchorGroup)?.id : node.dataset.entry
+    return move('after', anchor, lastId && nextTopLevel(tabs, lastId, undefined, groupId))
   }
 
-  // The pin zone is open while the pointer is above the middle of the
-  // workspace name (which the open zone pushes down, so it stays open
+  // The Essentials zone is open while the pointer is above the middle of
+  // the workspace name (which the open zone pushes down, so it stays open
   // until the pointer moves onto the list).
   private toggleZone(y: number): void {
     const name = this.zone && this.root.querySelector('.workspace-indicator')
@@ -281,8 +318,8 @@ export class Dragger {
     this.zone!.classList.toggle('open', y < r.top + r.height / 2)
   }
 
-  private firstListItem(): HTMLElement | null {
-    return this.root.querySelector<HTMLElement>('.scroll > [data-kind="tab"], .scroll > .folder')
+  private lastListItem(): HTMLElement | undefined {
+    return [...this.root.querySelectorAll<HTMLElement>('.scroll > [data-section="tabs"], .scroll > .folder')].at(-1)
   }
 
   // ---- Feedback ----
@@ -303,7 +340,7 @@ export class Dragger {
     ind.hidden = false
     const host = this.host.getBoundingClientRect()
     const r = t.node.getBoundingClientRect()
-    const vertical = t.node.dataset.kind === 'essential'
+    const vertical = t.node.dataset.kind === 'essential' || t.node.dataset.kind === 'workspace'
     ind.classList.toggle('vertical', vertical)
     if (vertical) {
       const x = t.where === 'before' ? r.left - 2 : r.right + 2

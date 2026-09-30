@@ -4,7 +4,7 @@
 // an entry's page lives in at most one window. Selecting an entry that is
 // open in another window moves the live page here (settled decision 1);
 // workspaces no window shows keep no pages (decision 2).
-import type { HostCommand, WindowState } from '../shared/protocol.ts'
+import type { EntryView, HostCommand, WindowState } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import * as M from './model.ts'
 import type { Store } from './store.ts'
@@ -213,12 +213,13 @@ export class GroveHost {
     else this.loading.delete(tab.id)
     const entryId = this.entryOf.get(tab.id)
     if (!entryId) return
-    const ws = M.workspaceOfEntry(this.model, entryId)
-    if (!ws) return
     this.update((m) =>
-      M.withWorkspace(m, ws.id, (w) =>
-        M.updateEntry(w, entryId, { url: tab.url || undefined, title: tab.title || undefined })
-      )
+      M.editEntry(m, entryId, (e) => ({
+        ...e,
+        url: tab.url || e.url,
+        title: tab.title || e.title,
+        favicon: tab.favIconUrl || e.favicon
+      }))
     )
   }
 
@@ -226,7 +227,7 @@ export class GroveHost {
     const entryId = this.entryOf.get(tabId)
     const b = this.windows.get(windowId)
     if (!entryId || !b) return
-    if (M.workspaceOfEntry(this.model, entryId)?.id !== b.workspaceId) return
+    if (!this.shows(b, entryId)) return
     this.setActive(windowId, b, entryId)
     this.queuePush()
   }
@@ -247,7 +248,10 @@ export class GroveHost {
       case 'newTab':
         return this.newTab(windowId)
       case 'setPinned':
+        if (!M.findEntry(this.model, c.entryId)?.workspace) return this.moveEntry(windowId, c.entryId, { section: 'pinned' })
         return this.editWorkspace(b, (ws) => M.setPinned(ws, c.entryId, c.pinned))
+      case 'setEssential':
+        return this.moveEntry(windowId, c.entryId, { section: c.essential ? 'essentials' : 'tabs' })
       case 'newFolder':
         return this.editWorkspace(b, (ws) => M.createGroup(ws, [c.entryId])[0])
       case 'toggleFolder':
@@ -258,21 +262,27 @@ export class GroveHost {
       case 'ungroup':
         return this.editWorkspace(b, (ws) => M.ungroup(ws, c.groupId))
       case 'moveEntry':
-        return this.editWorkspace(b, (ws) =>
-          M.placeEntry(ws, c.entryId, { beforeId: c.beforeId, pinned: c.pinned, groupId: c.groupId })
-        )
+        return this.moveEntry(windowId, c.entryId, { section: c.section, beforeId: c.beforeId, groupId: c.groupId })
+      case 'moveToWorkspace':
+        this.update((m) => M.sendToWorkspace(m, c.entryId, c.workspaceId))
+        return this.settle(c.entryId)
+      case 'moveWorkspace':
+        this.update((m) => M.placeWorkspace(m, c.workspaceId, c.beforeId))
+        return
       case 'moveFolder':
         return this.editWorkspace(b, (ws) => M.placeGroup(ws, c.groupId, c.beforeId))
       case 'switchWorkspace':
         return this.switchWorkspace(windowId, c.workspaceId)
       case 'newWorkspace': {
         let id!: string
-        this.update((m) => ([m, id] = M.createWorkspace(m))[0])
+        this.update((m) => ([m, id] = M.createWorkspace(m, c.name, c.color, c.icon))[0])
         return this.switchWorkspace(windowId, id)
       }
-      case 'renameWorkspace':
-        this.update((m) => M.renameWorkspace(m, c.workspaceId, c.name))
+      case 'editWorkspace':
+        this.update((m) => M.editWorkspace(m, c.workspaceId, { name: c.name, color: c.color, icon: c.icon }))
         return
+      case 'deleteWorkspace':
+        return this.deleteWorkspace(c.workspaceId)
     }
   }
 
@@ -280,11 +290,50 @@ export class GroveHost {
     this.update((m) => M.withWorkspace(m, b.workspaceId, fn))
   }
 
+  private async moveEntry(windowId: number, entryId: string, drop: M.SectionDrop): Promise<void> {
+    const b = this.bindWindow(windowId)
+    this.update((m) => M.moveTo(m, entryId, b.workspaceId, drop))
+    await this.settle(entryId)
+  }
+
+  // After an entry changed workspace: windows on another workspace that
+  // were showing it move on, and if no window shows its new workspace, its
+  // page is unloaded (workspaces no window shows keep no pages).
+  private async settle(entryId: string): Promise<void> {
+    const found = M.findEntry(this.model, entryId)
+    if (!found?.workspace) return this.pushAll()
+    const home = found.workspace.id
+    for (const [windowId, b] of this.windows) {
+      if (b.activeEntryId !== entryId || b.workspaceId === home) continue
+      await this.afterLoss(windowId)
+      if (!b.activeEntryId) await this.showActive(windowId)
+    }
+    const tabId = this.tabOf.get(entryId)
+    if (tabId !== undefined && ![...this.windows.values()].some((b) => b.workspaceId === home)) {
+      this.unmap(entryId)
+      await this.keepWindowOpen(this.tabWindow.get(tabId)!, [tabId])
+      await this.closeTabs([tabId])
+    }
+    this.pushAll()
+  }
+
+  // Windows on the workspace move to a neighbor first, which unloads it.
+  private async deleteWorkspace(workspaceId: string): Promise<void> {
+    if (this.model.workspaces.length <= 1) return
+    const next = M.neighborWorkspace(this.model, workspaceId, -1)
+    for (const [windowId, b] of this.windows) {
+      if (b.workspaceId === workspaceId) await this.switchWorkspace(windowId, next)
+    }
+    await this.unloadIfHidden(workspaceId)
+    this.update((m) => M.deleteWorkspace(m, workspaceId))
+    this.pushAll()
+  }
+
   // Shows an entry in a window: activates its tab here, moves the live page
   // over from another window, or opens a frozen entry.
   async activateIn(windowId: number, entryId: string): Promise<void> {
     const b = this.bindWindow(windowId)
-    if (M.workspaceOfEntry(this.model, entryId)?.id !== b.workspaceId) return
+    if (!this.shows(b, entryId)) return
     this.setActive(windowId, b, entryId)
     this.pushAll()
     const bridge = this.bridge!
@@ -367,7 +416,7 @@ export class GroveHost {
     const b = this.windows.get(windowId)
     if (!b) return
     const ws = M.getWorkspace(this.model, b.workspaceId)
-    const here = ws.entries.filter((e) => {
+    const here = [...ws.entries, ...this.model.essentials].filter((e) => {
       const t = this.tabOf.get(e.id)
       return t !== undefined && this.tabWindow.get(t) === windowId && e.id !== b.activeEntryId
     })
@@ -432,13 +481,24 @@ export class GroveHost {
   }
 
   private closeEntries(ids: string[]): void {
-    const ws = M.workspaceOfEntry(this.model, ids[0])
-    if (!ws) return
-    this.update((m) => M.withWorkspace(m, ws.id, (w) => M.closeEntries(w, ids)))
+    this.update((m) => M.removeEntries(m, ids))
+  }
+
+  // Whether a window on binding `b` shows the entry: its workspace's own,
+  // or an Essential.
+  private shows(b: Binding, entryId: string): boolean {
+    const found = M.findEntry(this.model, entryId)
+    return !!found && (!found.workspace || found.workspace.id === b.workspaceId)
   }
 
   private setActive(_windowId: number, b: Binding, entryId: string): void {
     b.activeEntryId = entryId
+    if (!M.findEntry(this.model, entryId)?.workspace) {
+      // An Essential: the workspace keeps its own last tab.
+      const now = Date.now()
+      this.update((m) => ({ ...M.editEntry(m, entryId, (e) => ({ ...e, lastActive: now })), lastActiveWorkspaceId: b.workspaceId }))
+      return
+    }
     this.update((m) => ({
       ...M.withWorkspace(m, b.workspaceId, (ws) => M.activateEntry(ws, entryId)),
       lastActiveWorkspaceId: b.workspaceId
@@ -446,7 +506,7 @@ export class GroveHost {
   }
 
   private entry(entryId: string): Entry | undefined {
-    return M.workspaceOfEntry(this.model, entryId)?.entries.find((e) => e.id === entryId)
+    return M.findEntry(this.model, entryId)?.entry
   }
 
   private map(entryId: string, tabId: number): void {
@@ -495,28 +555,32 @@ export class GroveHost {
 
   private view(windowId: number, b: Binding): WindowState {
     const ws = M.getWorkspace(this.model, b.workspaceId)
+    const entryView = (e: Entry): EntryView => {
+      const t = this.tabOf.get(e.id)
+      return {
+        id: e.id,
+        title: e.title || e.url,
+        url: e.url,
+        favicon: e.favicon,
+        pinned: e.pinned,
+        groupId: e.groupId,
+        live: t !== undefined,
+        here: t !== undefined && this.tabWindow.get(t) === windowId,
+        loading: t !== undefined && this.loading.has(t)
+      }
+    }
     return {
       windowId,
-      workspaces: this.model.workspaces.map(({ id, name, color }) => ({ id, name, color })),
+      workspaces: this.model.workspaces.map(({ id, name, color, icon }) => ({ id, name, color, icon })),
       workspace: {
         id: ws.id,
         name: ws.name,
         color: ws.color,
+        icon: ws.icon,
         groups: ws.groups,
-        entries: ws.entries.map((e) => {
-          const t = this.tabOf.get(e.id)
-          return {
-            id: e.id,
-            title: e.title || e.url,
-            url: e.url,
-            pinned: e.pinned,
-            groupId: e.groupId,
-            live: t !== undefined,
-            here: t !== undefined && this.tabWindow.get(t) === windowId,
-            loading: t !== undefined && this.loading.has(t)
-          }
-        })
+        entries: ws.entries.map(entryView)
       },
+      essentials: this.model.essentials.map(entryView),
       activeEntryId: b.activeEntryId
     }
   }

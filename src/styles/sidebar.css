@@ -12,6 +12,12 @@
   user-select: none;
 }
 * { corner-shape: superellipse(var(--zen-squircle-value)); }
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 button { font: inherit; color: inherit; border: 0; background: none; padding: 0; }
 
 .scroll {
@@ -338,3 +344,98 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
   color: color-mix(in srgb, currentColor 60%, transparent);
   font-size: 12px;
 }
+
+/* ---- Workspace pins ---- */
+
+/* Between the workspace's pinned tabs and its other tabs, as in Zen. */
+.pinned-separator {
+  height: 9px;
+  margin: 0 8px;
+  position: relative;
+}
+.pinned-separator::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 1px;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+}
+.pinned-separator.empty { height: 2px; }
+.pinned-separator.empty::after { display: none; }
+
+/* ---- Workspace icons ---- */
+
+.workspace-switcher svg,
+.workspace-indicator .icon svg,
+.ws-icons svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.emoji { font-size: 14px; line-height: 1; }
+.workspace-switcher button.drop-into {
+  filter: none;
+  opacity: 1;
+  background: color-mix(in srgb, var(--zen-primary-color) 30%, transparent);
+  outline: 1.5px solid var(--zen-primary-color);
+  outline-offset: -1.5px;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+/* ---- Workspace editor ---- */
+
+.ws-editor {
+  position: absolute;
+  z-index: 11;
+  left: 0;
+  right: 0;
+  bottom: 40px;
+  margin: 0;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: 12px;
+  background: light-dark(#fafbff, #1c1c1c);
+  box-shadow: var(--zen-big-shadow);
+  outline: 0.5px solid light-dark(rgba(0, 0, 0, 0.2), rgb(75, 75, 75));
+}
+.ws-editor-title { font-weight: 600; font-size: 12px; opacity: 0.7; }
+.ws-editor input {
+  font: inherit;
+  color: inherit;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  outline: 1px solid transparent;
+  background: var(--zen-toolbar-element-bg);
+}
+.ws-editor input:focus { outline-color: var(--ws-color); }
+.ws-editor .ws-name { font-weight: 600; }
+.ws-icons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(26px, 1fr));
+  gap: 2px;
+}
+.ws-icons button,
+.ws-colors button {
+  height: 26px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, currentColor 75%, transparent);
+}
+.ws-icons button:hover { background: var(--tab-background-color-hover); }
+.ws-icons button.selected { color: var(--ws-color); background: color-mix(in srgb, var(--ws-color) 20%, transparent); }
+.ws-colors { display: flex; justify-content: space-between; }
+.ws-colors button { width: 20px; height: 20px; border-radius: 50%; background: var(--swatch); }
+.ws-colors button.selected { outline: 2px solid var(--swatch); outline-offset: 2px; }
+.ws-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.ws-actions button { padding: 5px 12px; border-radius: 8px; font-weight: 600; }
+.ws-cancel:hover { background: var(--tab-background-color-hover); }
+.ws-save { background: var(--ws-color); color: white; }
+.ws-save:hover { filter: brightness(1.1); }

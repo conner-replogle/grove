@@ -7,6 +7,12 @@ import {
   createGroup,
   createWorkspace,
   deleteWorkspace,
+  editWorkspace,
+  findEntry,
+  moveTo,
+  placeWorkspace,
+  removeEntries,
+  sendToWorkspace,
   emptyModel,
   getWorkspace,
   moveEntry,
@@ -331,5 +337,82 @@ describe('drag and drop', () => {
     const moved = placeGroup(w, gid(w))
     expect(titles(placeGroup(moved, gid(w), id(moved, 'c')))).toEqual(['*x', 'a[F]', 'b[F]', 'c'])
     expect(placeGroup(w, gid(w), id(w, 'b'))).toBe(w)
+  })
+})
+
+describe('essentials and workspace pins', () => {
+  // Home: *p, a, b; Work: w. No Essentials yet.
+  function two(): { m: ReturnType<typeof emptyModel>; home: string; work: string } {
+    let m = emptyModel()
+    let work: string
+    ;[m, work] = createWorkspace(m, 'Work', 'blue', 'briefcase')
+    const home = m.workspaces[0].id
+    m = withWorkspace(m, home, () => ({ ...ws('*p', 'a', 'b'), id: home }))
+    m = withWorkspace(m, work, (w) => addEntry(w, { url: 'x', title: 'w' })[0])
+    return { m, home, work }
+  }
+  const eid = (m: ReturnType<typeof emptyModel>, title: string): string =>
+    [...m.essentials, ...m.workspaces.flatMap((w) => w.entries)].find((e) => e.title === title)!.id
+
+  it('makes a tab an Essential, shared by every workspace', () => {
+    const { m, home } = two()
+    const next = moveTo(m, eid(m, 'a'), home, { section: 'essentials' })
+    expect(next.essentials.map((e) => e.title)).toEqual(['a'])
+    expect(titles(getWorkspace(next, home))).toEqual(['*p', 'b'])
+    expect(findEntry(next, eid(m, 'a'))?.workspace).toBeUndefined()
+  })
+
+  it('orders Essentials and moves one back into a workspace as a pin', () => {
+    let { m, home, work } = two()
+    m = moveTo(m, eid(m, 'a'), home, { section: 'essentials' })
+    m = moveTo(m, eid(m, 'b'), home, { section: 'essentials', beforeId: eid(m, 'a') })
+    expect(m.essentials.map((e) => e.title)).toEqual(['b', 'a'])
+    m = moveTo(m, eid(m, 'a'), work, { section: 'pinned' })
+    expect(m.essentials.map((e) => e.title)).toEqual(['b'])
+    expect(titles(getWorkspace(m, work))).toEqual(['*a', 'w'])
+  })
+
+  it('moves within a workspace between its pins and tabs', () => {
+    const { m, home } = two()
+    expect(titles(getWorkspace(moveTo(m, eid(m, 'b'), home, { section: 'pinned' }), home))).toEqual(['*p', '*b', 'a'])
+    expect(titles(getWorkspace(moveTo(m, eid(m, 'p'), home, { section: 'tabs' }), home))).toEqual(['a', 'b', 'p'])
+  })
+
+  it('sends a tab to another workspace, keeping a pin', () => {
+    const { m, home, work } = two()
+    const next = sendToWorkspace(sendToWorkspace(m, eid(m, 'a'), work), eid(m, 'p'), work)
+    expect(titles(getWorkspace(next, home))).toEqual(['b'])
+    expect(titles(getWorkspace(next, work))).toEqual(['*p', 'w', 'a'])
+    expect(sendToWorkspace(next, eid(m, 'b'), home)).toBe(next)
+  })
+
+  it('edits Essentials and workspace entries alike, and removes them', () => {
+    let { m, home } = two()
+    m = moveTo(m, eid(m, 'a'), home, { section: 'essentials' })
+    m = removeEntries(m, [eid(m, 'a'), eid(m, 'b')])
+    expect(m.essentials).toEqual([])
+    expect(titles(getWorkspace(m, home))).toEqual(['*p'])
+  })
+})
+
+describe('workspace editing and order', () => {
+  it('creates with an icon, edits name, color and icon', () => {
+    let [m, wid] = createWorkspace(emptyModel(), ' Work ', 'blue', '🚀')
+    expect(getWorkspace(m, wid)).toMatchObject({ name: 'Work', color: 'blue', icon: '🚀' })
+    m = editWorkspace(m, wid, { name: 'Job', color: 'red', icon: 'briefcase' })
+    expect(getWorkspace(m, wid)).toMatchObject({ name: 'Job', color: 'red', icon: 'briefcase' })
+    m = editWorkspace(m, wid, { name: '  ', icon: '' })
+    expect(getWorkspace(m, wid).name).toBe('Job')
+    expect(getWorkspace(m, wid).icon).toBeUndefined()
+  })
+
+  it('places a workspace before another or at the end', () => {
+    let m = emptyModel()
+    ;[m] = createWorkspace(m, 'B')
+    ;[m] = createWorkspace(m, 'C')
+    const [a, b, c] = m.workspaces.map((w) => w.id)
+    expect(placeWorkspace(m, c, a).workspaces.map((w) => w.name)).toEqual(['C', 'Home', 'B'])
+    expect(placeWorkspace(m, a).workspaces.map((w) => w.name)).toEqual(['B', 'C', 'Home'])
+    expect(placeWorkspace(m, b, b)).toBe(m)
   })
 })

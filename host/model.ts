@@ -2,7 +2,7 @@
 // model or workspace and never mutates its input, so the service can diff,
 // the store can save snapshots and the tests need no Electron.
 import { randomUUID } from 'node:crypto'
-import { COLORS, type Color, type Entry, type Group, type Model, type MoveTarget, type Workspace } from '../shared/types.ts'
+import { COLORS, type Color, type Entry, type Group, type Model, type MoveTarget, type Section, type Workspace } from '../shared/types.ts'
 
 export const newId = (): string => randomUUID()
 
@@ -10,7 +10,7 @@ export const newId = (): string => randomUUID()
 
 export function emptyModel(): Model {
   const home = newWorkspace('Home', 'green')
-  return { version: 1, workspaces: [home], lastActiveWorkspaceId: home.id }
+  return { version: 1, workspaces: [home], essentials: [], lastActiveWorkspaceId: home.id }
 }
 
 function newWorkspace(name: string, color: Color): Workspace {
@@ -36,12 +36,34 @@ function nextColor(used: Color[]): Color {
   return COLORS.find((c) => !used.includes(c)) ?? COLORS[used.length % COLORS.length]
 }
 
-export function createWorkspace(model: Model, name?: string, color?: Color): [Model, string] {
+export function createWorkspace(model: Model, name?: string, color?: Color, icon?: string): [Model, string] {
   const ws = newWorkspace(
     name?.trim() || `Workspace ${model.workspaces.length + 1}`,
     color ?? nextColor(model.workspaces.map((w) => w.color))
   )
+  if (icon?.trim()) ws.icon = icon.trim()
   return [{ ...model, workspaces: [...model.workspaces, ws] }, ws.id]
+}
+
+export interface WorkspacePatch {
+  name?: string
+  color?: Color
+  icon?: string
+}
+
+// Changes a workspace's name, color or icon; an empty name is ignored and
+// an empty icon goes back to the default.
+export function editWorkspace(model: Model, id: string, patch: WorkspacePatch): Model {
+  return withWorkspace(model, id, (ws) => {
+    const next = { ...ws }
+    if (patch.name?.trim()) next.name = patch.name.trim()
+    if (patch.color) next.color = patch.color
+    if (patch.icon !== undefined) {
+      if (patch.icon.trim()) next.icon = patch.icon.trim()
+      else delete next.icon
+    }
+    return next
+  })
 }
 
 export function renameWorkspace(model: Model, id: string, name: string): Model {
@@ -322,4 +344,96 @@ export function transferEntry(model: Model, entryId: string, fromId: string, toI
 // The workspace holding an entry, if any.
 export function workspaceOfEntry(model: Model, entryId: string): Workspace | undefined {
   return model.workspaces.find((w) => w.entries.some((e) => e.id === entryId))
+}
+
+// ---- Essentials, and entries wherever they are ----
+
+// Where an entry lives: a workspace, or the Essentials (workspace undefined).
+export function findEntry(model: Model, id: string): { entry: Entry; workspace?: Workspace } | undefined {
+  const essential = model.essentials.find((e) => e.id === id)
+  if (essential) return { entry: essential }
+  const workspace = workspaceOfEntry(model, id)
+  const entry = workspace?.entries.find((e) => e.id === id)
+  return entry && { entry, workspace }
+}
+
+// Applies `fn` to an entry wherever it lives.
+export function editEntry(model: Model, id: string, fn: (e: Entry) => Entry): Model {
+  if (model.essentials.some((e) => e.id === id)) {
+    return { ...model, essentials: model.essentials.map((e) => (e.id === id ? fn(e) : e)) }
+  }
+  const ws = workspaceOfEntry(model, id)
+  if (!ws) return model
+  return withWorkspace(model, ws.id, (w) => ({ ...w, entries: w.entries.map((e) => (e.id === id ? fn(e) : e)) }))
+}
+
+// Removes entries wherever they live.
+export function removeEntries(model: Model, ids: string[]): Model {
+  const gone = new Set(ids)
+  let next = model
+  if (model.essentials.some((e) => gone.has(e.id))) {
+    next = { ...next, essentials: next.essentials.filter((e) => !gone.has(e.id)) }
+  }
+  for (const ws of model.workspaces) {
+    if (ws.entries.some((e) => gone.has(e.id))) next = withWorkspace(next, ws.id, (w) => closeEntries(w, ids))
+  }
+  return next
+}
+
+export interface SectionDrop {
+  section: Section
+  // The entry it lands in front of; without it, the end of the section.
+  beforeId?: string
+  groupId?: string
+}
+
+// Moves an entry (from any workspace or the Essentials) to a place in the
+// Essentials or in workspace `workspaceId`.
+export function moveTo(model: Model, entryId: string, workspaceId: string, drop: SectionDrop): Model {
+  const found = findEntry(model, entryId)
+  if (!found || drop.beforeId === entryId) return model
+  const { entry, workspace: from } = found
+  const plain = { ...entry, pinned: false, groupId: undefined }
+
+  if (drop.section === 'essentials') {
+    const without = from ? withWorkspace(model, from.id, (w) => closeEntry(w, entryId)) : model
+    const rest = without.essentials.filter((e) => e.id !== entryId)
+    const at = drop.beforeId ? rest.findIndex((e) => e.id === drop.beforeId) : -1
+    rest.splice(at < 0 ? rest.length : at, 0, plain)
+    return { ...without, essentials: rest }
+  }
+
+  const pinned = drop.section === 'pinned'
+  if (from?.id === workspaceId) {
+    return withWorkspace(model, workspaceId, (w) =>
+      placeEntry(w, entryId, { beforeId: drop.beforeId, pinned, groupId: drop.groupId })
+    )
+  }
+  // From the Essentials or another workspace: add it at the end, then place it.
+  const without = from
+    ? withWorkspace(model, from.id, (w) => closeEntry(w, entryId))
+    : { ...model, essentials: model.essentials.filter((e) => e.id !== entryId) }
+  return withWorkspace(without, workspaceId, (w) =>
+    placeEntry(normalize({ ...w, entries: [...w.entries, plain] }), entryId, {
+      beforeId: drop.beforeId,
+      pinned,
+      groupId: drop.groupId
+    })
+  )
+}
+
+// Sends an entry to the end of another workspace's tabs (dropped on its
+// icon), keeping a workspace pin.
+export function sendToWorkspace(model: Model, entryId: string, workspaceId: string): Model {
+  const found = findEntry(model, entryId)
+  if (!found || found.workspace?.id === workspaceId) return model
+  return moveTo(model, entryId, workspaceId, { section: found.entry.pinned ? 'pinned' : 'tabs' })
+}
+
+// Moves workspace `id` to just before `beforeId`, or to the end.
+export function placeWorkspace(model: Model, id: string, beforeId?: string): Model {
+  if (id === beforeId) return model
+  const rest = model.workspaces.filter((w) => w.id !== id)
+  const at = beforeId ? rest.findIndex((w) => w.id === beforeId) : -1
+  return moveWorkspace(model, id, at < 0 ? rest.length : at)
 }

@@ -15,7 +15,7 @@ export function svg(markup: string): SVGElement {
       continue
     }
     const node = document.createElementNS(NS, name)
-    for (const [, key, value] of attrs.matchAll(ATTR)) node.setAttribute(key, value)
+    for (const [, key, value] of attrs.matchAll(ATTR)) if (key !== 'xmlns') node.setAttribute(key, value)
     if (stack.length) stack[stack.length - 1].append(node)
     else root = node as SVGElement
     if (!selfClosing) stack.push(node)

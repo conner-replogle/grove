@@ -47,6 +47,8 @@ export interface Workspace {
   id: string
   name: string
   color: Color
+  // A Lucide icon name from the workspace icon set, or an emoji.
+  icon?: string
   // Tab order: pinned entries first, then the rest.
   entries: Entry[]
   groups: Group[]
@@ -56,8 +58,15 @@ export interface Workspace {
 export interface Model {
   version: 1
   workspaces: Workspace[]
+  // Zen's Essentials: pinned pages every workspace shares. Workspace pins
+  // (entries with `pinned`) belong to their workspace only.
+  essentials: Entry[]
   lastActiveWorkspaceId: string
 }
+
+// Where an entry sits: the shared Essentials, its workspace's pins, or
+// its workspace's other tabs.
+export type Section = 'essentials' | 'pinned' | 'tabs'
 
 // Where a dragged entry lands: an index among the other entries, plus the
 // section and folder it joins.

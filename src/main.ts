@@ -61,6 +61,10 @@ function keepSidebarMounted(): void {
     if (!slot.querySelector('grove-sidebar')) slot.append(document.createElement('grove-sidebar'))
     resizer ??= sidebarResizer(app)
     if (resizer.parentNode !== grid) grid.append(resizer)
+    // The extensions button lives inside the URL bar, as in Zen.
+    const box = root.querySelector('#addressBox')
+    const extensions = root.querySelector('#extensionsBar')
+    if (box && extensions && extensions.parentNode !== box) box.append(extensions)
     return true
   }
   const wait = (): void => {

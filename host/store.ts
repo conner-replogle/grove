@@ -91,7 +91,10 @@ export function parseModel(raw: unknown): Model | undefined {
   const workspaces = raw.workspaces.map(parseWorkspace).filter((w): w is Workspace => !!w)
   if (workspaces.length === 0) return undefined
   const last = workspaces.find((w) => w.id === raw.lastActiveWorkspaceId) ?? workspaces[0]
-  return { version: 1, workspaces, lastActiveWorkspaceId: last.id }
+  const essentials = Array.isArray(raw.essentials)
+    ? raw.essentials.map(parseEntry).flatMap((e) => (e ? [{ ...e, pinned: false, groupId: undefined }] : []))
+    : []
+  return { version: 1, workspaces, essentials, lastActiveWorkspaceId: last.id }
 }
 
 function parseWorkspace(raw: unknown): Workspace | undefined {
@@ -115,6 +118,7 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
     id: raw.id,
     name: isString(raw.name) && raw.name ? raw.name : 'Workspace',
     color: color(raw.color),
+    ...(isString(raw.icon) && raw.icon ? { icon: raw.icon } : {}),
     entries,
     groups,
     activeEntryId: isString(raw.activeEntryId) ? raw.activeEntryId : undefined

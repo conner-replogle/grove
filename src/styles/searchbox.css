@@ -8,3 +8,12 @@
   --cr-searchbox-height: 34px;
   --cr-searchbox-font-size: 13px;
 }
+
+/* Floating (focused): the suggestions and the field share one panel. */
+:host(:focus-within) #inputWrapper {
+  background: light-dark(#fff, #242424) !important;
+  border-radius: 14px;
+  box-shadow: var(--zen-big-shadow, 0 8px 30px rgba(0, 0, 0, 0.35)) !important;
+  outline: 0.5px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.12));
+}
+:host(:focus-within) cr-searchbox-dropdown { padding-bottom: 6px; }

@@ -1,36 +1,41 @@
 // <grove-sidebar>: the window's workspace, drawn from the Grove host's
 // shared model. Every window on a workspace shows the same entries; a click
 // asks the host to show that entry here, which moves its page over if it is
-// open in another window. Pinned entries are the Essentials grid; folders
-// are Grove's own (Chrome's tab groups only live inside one window).
-import type { EntryView, WindowState } from '../shared/protocol.ts'
-import type { Color, Group } from '../shared/types.ts'
+// open in another window.
+//
+// Top to bottom, as in Zen: the Essentials grid (shared by every
+// workspace), the workspace's name, its pinned tabs, a separator, New Tab
+// and its other tabs, and folders (Grove's own: Chrome's tab groups only
+// live inside one window). The workspace icons sit at the bottom.
+import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protocol.ts'
+import { COLORS, type Group } from '../shared/types.ts'
 import { Dragger } from './drag'
 import { send, subscribe } from './host-client'
 import { icons } from './icons'
 import sidebarCss from './styles/sidebar.css'
 import { svg } from './svg'
+import { COLOR_HEX, workspaceEditor, workspaceIcon } from './workspace-editor'
 import folderSvg from './zen/folder-icon.svg'
 import zenTokens from './zen/tokens.css'
 
-const COLOR_HEX: Record<Color, string> = {
-  green: '#4caf6e',
-  blue: '#4a8fe0',
-  purple: '#9a6ce0',
-  pink: '#e06ca8',
-  red: '#e05a5a',
-  orange: '#e8914a',
-  yellow: '#d6b43c',
-  gray: '#8e8e93'
-}
+// Chrome's favicon cache, by the page's own icon URL when the tab has
+// reported one (a page looked up by its URL is only found once history has
+// stored it), else by the page URL.
+const faviconFor = (e: EntryView): string =>
+  `chrome://favicon2/?size=16&scaleFactor=1x&allowGoogleServerFallback=0&${
+    e.favicon && /^https?:/.test(e.favicon) ? `iconUrl=${encodeURIComponent(e.favicon)}` : `pageUrl=${encodeURIComponent(e.url)}`
+  }`
 
-const faviconFor = (url: string): string =>
-  `chrome://favicon2/?size=16&scaleFactor=1x&allowGoogleServerFallback=0&pageUrl=${encodeURIComponent(url)}`
+type MenuItem = [string, () => void] | 'separator'
 
 class GroveSidebar extends HTMLElement {
   private readonly root = this.attachShadow({ mode: 'open' })
+  // The list and the workspace bar; overlays (menu, editor) sit beside it so
+  // a re-render doesn't take them (or the editor's focus) away.
+  private readonly body = el('div', 'body')
   private state?: WindowState
   private menu?: HTMLElement
+  private editor?: HTMLElement
   private readonly drag = new Dragger(this, this.root, () => this.state)
   // A render that arrived while a drag was under way (it would pull the
   // dragged row out from under the pointer).
@@ -40,6 +45,7 @@ class GroveSidebar extends HTMLElement {
     const sheet = new CSSStyleSheet()
     sheet.replaceSync(zenTokens + sidebarCss)
     this.root.adoptedStyleSheets = [sheet]
+    this.root.append(this.body)
     subscribe((s) => {
       this.state = s
       this.render()
@@ -62,41 +68,55 @@ class GroveSidebar extends HTMLElement {
     }
     this.renderQueued = false
     const ws = s.workspace
+    const scrollTop = this.root.querySelector('.scroll')?.scrollTop ?? 0
     const scroll = el('div', 'scroll')
 
-    const pinned = ws.entries.filter((e) => e.pinned)
-    if (pinned.length) {
+    if (s.essentials.length) {
       const grid = el('div', 'essentials')
-      grid.dataset.count = String(pinned.length)
-      for (const e of pinned) grid.append(this.essential(e, s))
+      grid.dataset.count = String(s.essentials.length)
+      for (const e of s.essentials) grid.append(this.essential(e, s))
       scroll.append(grid)
     }
 
     const indicator = el('div', 'workspace-indicator')
-    indicator.dataset.kind = 'top'
+    indicator.dataset.kind = 'pins-start'
     indicator.style.setProperty('--ws-color', COLOR_HEX[ws.color])
-    indicator.append(iconEl('icon', icons.leaf), el('span', 'name', ws.name))
+    const wsIcon = el('span', 'icon')
+    wsIcon.append(workspaceIcon(ws.icon))
+    indicator.append(wsIcon, el('span', 'name', ws.name))
+    indicator.addEventListener('dblclick', () => this.openEditor(ws))
+    indicator.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault()
+      this.openMenu(ev, this.workspaceMenu(ws, s))
+    })
     scroll.append(indicator)
 
+    const pinned = ws.entries.filter((e) => e.pinned)
+    for (const e of pinned) scroll.append(this.tabRow(e, s, 'pinned'))
+    const sep = el('div', 'pinned-separator')
+    sep.dataset.kind = 'tabs-start'
+    sep.classList.toggle('empty', !pinned.length)
+    scroll.append(sep)
+
     const newTab = el('button', 'new-tab')
-    newTab.dataset.kind = 'top'
+    newTab.dataset.kind = 'tabs-start'
     newTab.append(iconEl('favicon icon', icons.plus), el('span', 'label', 'New Tab'))
     newTab.addEventListener('click', () => send({ type: 'newTab' }))
     scroll.append(newTab)
 
-    const unpinned = ws.entries.filter((e) => !e.pinned)
+    const tabs = ws.entries.filter((e) => !e.pinned)
     const seen = new Set<string>()
-    for (const e of unpinned) {
-      if (!e.groupId) scroll.append(this.tabRow(e, s))
+    for (const e of tabs) {
+      if (!e.groupId) scroll.append(this.tabRow(e, s, 'tabs'))
       else if (!seen.has(e.groupId)) {
         seen.add(e.groupId)
         const group = ws.groups.find((g) => g.id === e.groupId)
-        if (group) scroll.append(this.folder(group, unpinned.filter((x) => x.groupId === e.groupId), s))
+        if (group) scroll.append(this.folder(group, tabs.filter((x) => x.groupId === e.groupId), s))
       }
     }
 
-    this.root.replaceChildren(scroll, this.foot(s))
-    if (this.menu) this.root.append(this.menu)
+    this.body.replaceChildren(scroll, this.foot(s))
+    scroll.scrollTop = scrollTop
   }
 
   // Called by the dragger when a drag ends.
@@ -107,14 +127,19 @@ class GroveSidebar extends HTMLElement {
   private essential(e: EntryView, s: WindowState): HTMLElement {
     const tile = el('div', `essential${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}`)
     tile.title = e.title
-    tile.style.setProperty('--favicon', `url("${faviconFor(e.url)}")`)
+    tile.style.setProperty('--favicon', `url("${faviconFor(e)}")`)
     tile.append(favicon(e))
     tile.dataset.kind = 'essential'
-    this.wire(tile, e)
+    this.wire(tile, e, [
+      ['Remove from Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: false })],
+      ['Pin to this workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: true })],
+      'separator',
+      ['Close', () => send({ type: 'close', entryId: e.id })]
+    ])
     return tile
   }
 
-  private tabRow(e: EntryView, s: WindowState): HTMLElement {
+  private tabRow(e: EntryView, s: WindowState, section: 'pinned' | 'tabs'): HTMLElement {
     const row = el('div', `tab${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}`)
     row.title = `${e.title}\n${e.url}`
     row.append(favicon(e), el('span', 'label', e.title || e.url || 'New Tab'))
@@ -129,8 +154,18 @@ class GroveSidebar extends HTMLElement {
     })
     row.append(close)
     row.dataset.kind = 'tab'
+    row.dataset.section = section
     if (e.groupId) row.dataset.group = e.groupId
-    this.wire(row, e)
+    const others = s.workspaces.filter((w) => w.id !== s.workspace.id)
+    this.wire(row, e, [
+      ['Add to Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: true })],
+      [e.pinned ? 'Unpin from workspace' : 'Pin to workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: !e.pinned })],
+      ...(e.pinned ? [] : [['Add to new folder', () => send({ type: 'newFolder', entryId: e.id })] as MenuItem]),
+      ...(others.length ? (['separator'] as MenuItem[]) : []),
+      ...others.map((w): MenuItem => [`Move to ${w.name}`, () => send({ type: 'moveToWorkspace', entryId: e.id, workspaceId: w.id })]),
+      'separator',
+      ['Close', () => send({ type: 'close', entryId: e.id })]
+    ])
     return row
   }
 
@@ -152,7 +187,7 @@ class GroveSidebar extends HTMLElement {
     const shown = group.collapsed ? members.filter((m) => m.id === s.activeEntryId) : members
     if (shown.length) {
       const children = el('div', 'folder-tabs')
-      for (const m of shown) children.append(this.tabRow(m, s))
+      for (const m of shown) children.append(this.tabRow(m, s, 'tabs'))
       box.append(children)
     }
     return box
@@ -162,22 +197,59 @@ class GroveSidebar extends HTMLElement {
     const foot = el('div', 'foot')
     const switcher = el('div', 'workspace-switcher')
     for (const w of s.workspaces) {
-      const b = el('button', w.id === s.workspace.id ? 'active' : '')
+      const active = w.id === s.workspace.id
+      const b = el('button', active ? 'active' : '')
       b.title = w.name
-      b.style.color = w.id === s.workspace.id ? COLOR_HEX[w.color] : ''
-      b.append(svg(icons.leaf))
+      b.style.color = active ? COLOR_HEX[w.color] : ''
+      b.dataset.kind = 'workspace'
+      b.dataset.workspace = w.id
+      b.append(workspaceIcon(w.icon))
+      b.addEventListener('pointerdown', (ev) => this.drag.press(ev, { workspaceId: w.id }))
       b.addEventListener('click', () => send({ type: 'switchWorkspace', workspaceId: w.id }))
+      b.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault()
+        this.openMenu(ev, this.workspaceMenu(w, s))
+      })
       switcher.append(b)
     }
     const add = el('button', 'tbtn')
     add.title = 'New workspace'
     add.append(svg(icons.plus))
-    add.addEventListener('click', () => send({ type: 'newWorkspace' }))
+    add.addEventListener('click', () => this.openEditor(undefined))
     foot.append(el('span', 'tbtn-spacer'), switcher, add)
     return foot
   }
 
-  private wire(node: HTMLElement, e: EntryView): void {
+  private workspaceMenu(w: WorkspaceSummary, s: WindowState): MenuItem[] {
+    return [
+      ['Edit workspace…', () => this.openEditor(w)],
+      ...(s.workspaces.length > 1
+        ? (['separator', ['Delete workspace', () => send({ type: 'deleteWorkspace', workspaceId: w.id })]] as MenuItem[])
+        : [])
+    ]
+  }
+
+  private openEditor(existing: WorkspaceSummary | undefined): void {
+    this.closeMenu()
+    this.editor?.remove()
+    const s = this.state
+    if (!s) return
+    const used = s.workspaces.map((w) => w.color)
+    const defaults = {
+      name: `Workspace ${s.workspaces.length + 1}`,
+      color: COLORS.find((c) => !used.includes(c)) ?? 'gray'
+    }
+    this.editor = workspaceEditor(existing, defaults, (fields) => {
+      this.editor?.remove()
+      this.editor = undefined
+      if (!fields) return
+      if (existing) send({ type: 'editWorkspace', workspaceId: existing.id, ...fields })
+      else send({ type: 'newWorkspace', ...fields })
+    })
+    this.root.append(this.editor)
+  }
+
+  private wire(node: HTMLElement, e: EntryView, menu: MenuItem[]): void {
     node.dataset.entry = e.id
     node.addEventListener('mousedown', (ev) => {
       if (ev.button === 0) send({ type: 'activate', entryId: e.id })
@@ -188,34 +260,39 @@ class GroveSidebar extends HTMLElement {
     })
     node.addEventListener('contextmenu', (ev) => {
       ev.preventDefault()
-      this.openMenu(ev, [
-        [e.pinned ? 'Unpin' : 'Pin', () => send({ type: 'setPinned', entryId: e.id, pinned: !e.pinned })],
-        ['Add to new folder', () => send({ type: 'newFolder', entryId: e.id })],
-        ['Close', () => send({ type: 'close', entryId: e.id })]
-      ])
+      this.openMenu(ev, menu)
     })
   }
 
-  // A small Grove menu for Grove's own model (pins and folders are shared
-  // across windows, so Chrome's per-window tab menu can't manage them).
-  private openMenu(ev: MouseEvent, items: [string, () => void][]): void {
+  // A small Grove menu for Grove's own model (pins, Essentials, folders and
+  // workspaces are shared across windows, so Chrome's per-window tab menu
+  // can't manage them).
+  private openMenu(ev: MouseEvent, items: MenuItem[]): void {
     this.closeMenu()
     const menu = el('div', 'menu')
-    for (const [label, run] of items) {
-      const item = el('button', 'menu-item', label)
-      item.addEventListener('mousedown', (e) => e.stopPropagation())
-      item.addEventListener('click', () => {
+    for (const item of items) {
+      if (item === 'separator') {
+        menu.append(el('div', 'menu-separator'))
+        continue
+      }
+      const [label, run] = item
+      const button = el('button', 'menu-item', label)
+      button.addEventListener('mousedown', (e) => e.stopPropagation())
+      button.addEventListener('click', () => {
         this.closeMenu()
         run()
       })
-      menu.append(item)
+      menu.append(button)
     }
-    const box = this.getBoundingClientRect()
-    menu.style.left = `${Math.max(0, Math.min(ev.clientX - box.left, box.width - 170))}px`
-    menu.style.top = `${ev.clientY - box.top}px`
     menu.addEventListener('mousedown', (e) => e.stopPropagation())
     this.menu = menu
     this.root.append(menu)
+    // Keep it inside the sidebar: open upward near the bottom.
+    const box = this.getBoundingClientRect()
+    const h = menu.offsetHeight
+    const top = Math.min(ev.clientY - box.top, box.height - h - 4)
+    menu.style.left = `${Math.max(0, Math.min(ev.clientX - box.left, box.width - 170))}px`
+    menu.style.top = `${Math.max(0, top)}px`
   }
 
   private closeMenu(): void {
@@ -243,7 +320,7 @@ function favicon(e: EntryView): HTMLElement {
   // New Tab button.
   if (!e.url || e.url.startsWith('chrome://newtab')) return iconEl('favicon icon blank-page', icons.globe)
   const img = el('img', 'favicon')
-  img.src = faviconFor(e.url)
+  img.src = faviconFor(e)
   img.alt = ''
   img.draggable = false
   return img
