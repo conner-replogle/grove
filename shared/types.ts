@@ -41,11 +41,13 @@ export interface Entry {
 }
 
 // A folder of tabs. Its entries sit next to each other in the tab order.
+// A pinned folder sits among the workspace's pins, and so do its tabs.
 export interface Group {
   id: string
   title: string
   color: Color
   collapsed: boolean
+  pinned?: boolean
 }
 
 export interface Workspace {

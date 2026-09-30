@@ -4,9 +4,10 @@
 // open in another window.
 //
 // Top to bottom, as in Zen: the Essentials grid (shared by every
-// workspace), the workspace's name, its pinned tabs, a separator, New Tab
-// and its other tabs, and folders (Grove's own: Chrome's tab groups only
-// live inside one window). The workspace icons sit at the bottom.
+// workspace), the workspace's name, its pinned tabs and folders, a
+// separator, New Tab and its other tabs and folders (Grove's own: Chrome's
+// tab groups only live inside one window). The workspace icons sit at the
+// bottom.
 import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protocol.ts'
 import { COLORS, type Group } from '../shared/types.ts'
 import { Dragger } from './drag'
@@ -97,7 +98,7 @@ class GroveSidebar extends HTMLElement {
 
     const pinned = ws.entries.filter((e) => e.pinned)
     const tabs = ws.entries.filter((e) => !e.pinned)
-    for (const e of pinned) scroll.append(this.tabRow(e, s, 'pinned'))
+    scroll.append(...this.items(pinned, s, 'pinned'))
     // Zen's separator, with its Clear button: closes the workspace's tabs,
     // all but its pins.
     const sep = el('div', 'pinned-separator')
@@ -122,18 +123,25 @@ class GroveSidebar extends HTMLElement {
     })
     scroll.append(newTab)
 
-    const seen = new Set<string>()
-    for (const e of tabs) {
-      if (!e.groupId) scroll.append(this.tabRow(e, s, 'tabs'))
-      else if (!seen.has(e.groupId)) {
-        seen.add(e.groupId)
-        const group = ws.groups.find((g) => g.id === e.groupId)
-        if (group) scroll.append(this.folder(group, tabs.filter((x) => x.groupId === e.groupId), s))
-      }
-    }
+    scroll.append(...this.items(tabs, s, 'tabs'))
 
     this.body.replaceChildren(scroll, this.foot(s))
     scroll.scrollTop = scrollTop
+  }
+
+  // One section's rows: its loose tabs, and a box for each folder.
+  private items(entries: EntryView[], s: WindowState, section: 'pinned' | 'tabs'): HTMLElement[] {
+    const out: HTMLElement[] = []
+    const seen = new Set<string>()
+    for (const e of entries) {
+      if (!e.groupId) out.push(this.tabRow(e, s, section))
+      else if (!seen.has(e.groupId)) {
+        seen.add(e.groupId)
+        const group = s.workspace.groups.find((g) => g.id === e.groupId)
+        if (group) out.push(this.folder(group, entries.filter((x) => x.groupId === e.groupId), s, section))
+      }
+    }
+    return out
   }
 
   // Called by the dragger when a drag ends.
@@ -177,7 +185,7 @@ class GroveSidebar extends HTMLElement {
     this.wire(row, e, [
       ['Add to Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: true })],
       [e.pinned ? 'Unpin from workspace' : 'Pin to workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: !e.pinned })],
-      ...(e.pinned ? [] : [['Add to new folder', () => send({ type: 'newFolder', entryId: e.id })] as MenuItem]),
+      ...(e.groupId ? [] : [['Add to new folder', () => send({ type: 'newFolder', entryId: e.id })] as MenuItem]),
       ...(others.length ? (['separator'] as MenuItem[]) : []),
       ...others.map((w): MenuItem => [`Move to ${w.name}`, () => send({ type: 'moveToWorkspace', entryId: e.id, workspaceId: w.id })]),
       'separator',
@@ -186,25 +194,34 @@ class GroveSidebar extends HTMLElement {
     return row
   }
 
-  private folder(group: Group, members: EntryView[], s: WindowState): HTMLElement {
+  private folder(group: Group, members: EntryView[], s: WindowState, section: 'pinned' | 'tabs'): HTMLElement {
     const hasSelected = members.some((m) => m.id === s.activeEntryId)
     const box = el('div', `folder${group.collapsed ? ' collapsed' : ''}${hasSelected ? ' has-selected' : ''}`)
     box.style.setProperty('--folder-accent', COLOR_HEX[group.color])
+    box.dataset.section = section
     const head = el('div', 'folder-header')
     head.append(iconEl('folder-icon', folderSvg), el('span', 'label', group.title || 'Folder'))
     head.dataset.kind = 'folder'
     head.dataset.group = group.id
+    head.dataset.section = section
     head.addEventListener('pointerdown', (ev) => this.drag.press(ev, { groupId: group.id }))
     head.addEventListener('click', () => send({ type: 'toggleFolder', groupId: group.id }))
     head.addEventListener('contextmenu', (ev) => {
       ev.preventDefault()
-      this.openMenu(ev, [['Ungroup', () => send({ type: 'ungroup', groupId: group.id })]])
+      this.openMenu(ev, [
+        [
+          group.pinned ? 'Unpin from workspace' : 'Pin to workspace',
+          () => send({ type: 'setFolderPinned', groupId: group.id, pinned: !group.pinned })
+        ],
+        'separator',
+        ['Ungroup', () => send({ type: 'ungroup', groupId: group.id })]
+      ])
     })
     box.append(head)
     const shown = group.collapsed ? members.filter((m) => m.id === s.activeEntryId) : members
     if (shown.length) {
       const children = el('div', 'folder-tabs')
-      for (const m of shown) children.append(this.tabRow(m, s, 'tabs'))
+      for (const m of shown) children.append(this.tabRow(m, s, section))
       box.append(children)
     }
     return box

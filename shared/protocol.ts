@@ -49,10 +49,12 @@ export type HostCommand =
   | { type: 'newFolder'; entryId: string }
   | { type: 'toggleFolder'; groupId: string }
   | { type: 'ungroup'; groupId: string }
+  | { type: 'setFolderPinned'; groupId: string; pinned: boolean }
   // Drag and drop: `beforeId` is the entry the dragged one lands in front
   // of; without it, the end of the section (or of the folder `groupId`).
   | { type: 'moveEntry'; entryId: string; section: Section; beforeId?: string; groupId?: string }
-  | { type: 'moveFolder'; groupId: string; beforeId?: string }
+  // `pinned`: the section the folder lands in.
+  | { type: 'moveFolder'; groupId: string; beforeId?: string; pinned: boolean }
   | { type: 'moveToWorkspace'; entryId: string; workspaceId: string }
   | { type: 'moveWorkspace'; workspaceId: string; beforeId?: string }
   | { type: 'switchWorkspace'; workspaceId: string }

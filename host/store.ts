@@ -107,7 +107,8 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
                 id: g.id,
                 title: isString(g.title) ? g.title : 'Folder',
                 color: color(g.color),
-                collapsed: g.collapsed === true
+                collapsed: g.collapsed === true,
+                pinned: g.pinned === true
               }
             ]
           : []

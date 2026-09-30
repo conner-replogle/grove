@@ -8,7 +8,7 @@
 //                 | 'pins-start' (the workspace name: the top of its pins)
 //                 | 'tabs-start' (the separator and New Tab: the top of its tabs)
 //   data-entry    the entry id (tabs and Essentials)
-//   data-section  'pinned' | 'tabs' (tabs)
+//   data-section  'pinned' | 'tabs' (tabs, folders and folder headers)
 //   data-group    the folder id (folder headers, and tabs inside a folder)
 //   data-workspace  the workspace id (workspace icons)
 import type { EntryView, HostCommand, WindowState } from '../shared/protocol.ts'
@@ -232,24 +232,26 @@ export class Dragger {
         const id = node.dataset.entry!
         if (id === entryId) return undefined
         const section = node.dataset.section === 'pinned' ? 'pinned' : 'tabs'
+        const list = section === 'pinned' ? pinned : tabs
         const groupId = node.dataset.group
         const before = y < r.top + r.height / 2
         let beforeId: string | undefined = id
         if (!before) {
-          if (section === 'pinned') beforeId = next(pinned, id, entryId)
-          else if (groupId) beforeId = next(tabs.filter((e) => e.groupId === groupId), id, entryId)
-          else beforeId = nextTopLevel(tabs, id, entryId)
+          if (groupId) beforeId = next(list.filter((e) => e.groupId === groupId), id, entryId)
+          else beforeId = nextTopLevel(list, id, entryId)
         }
         return move(before ? 'before' : 'after', node, { section, groupId, beforeId })
       }
       case 'folder': {
         const groupId = node.dataset.group!
-        const members = tabs.filter((e) => e.groupId === groupId)
+        const section = node.dataset.section === 'pinned' ? 'pinned' : 'tabs'
+        const list = section === 'pinned' ? pinned : tabs
+        const members = list.filter((e) => e.groupId === groupId)
         if (y < r.top + r.height * 0.3) {
-          const beforeId = firstOther(members) ?? nextTopLevel(tabs, members[0]?.id, entryId)
-          return move('before', node.parentElement!, { section: 'tabs', beforeId })
+          const beforeId = firstOther(members) ?? nextTopLevel(list, members[0]?.id, entryId)
+          return move('before', node.parentElement!, { section, beforeId })
         }
-        return move('into', node, { section: 'tabs', groupId })
+        return move('into', node, { section, groupId })
       }
       case 'pins-start':
         return move('after', node, { section: 'pinned', beforeId: firstOther(pinned) })
@@ -282,30 +284,33 @@ export class Dragger {
     s: WindowState,
     hit: Element | null
   ): Target | undefined {
-    const tabs = s.workspace.entries.filter((e) => !e.pinned)
-    const move = (where: Where, n: HTMLElement, beforeId?: string): Target => ({
+    const section = (pinned: boolean): EntryView[] =>
+      s.workspace.entries.filter((e) => e.pinned === pinned && e.groupId !== groupId)
+    const move = (where: Where, n: HTMLElement, pinned: boolean, beforeId?: string): Target => ({
       node: n,
       where,
-      command: { type: 'moveFolder', groupId, beforeId }
+      command: { type: 'moveFolder', groupId, beforeId, pinned }
     })
     if (!node) {
       if (hit !== this.root.querySelector('.scroll') && hit !== this.host) return undefined
       const last = this.lastListItem()
-      return last ? move('after', last) : undefined
+      return last ? move('after', last, false) : undefined
     }
-    if (node.dataset.kind === 'tabs-start') return move('after', node, tabs[0]?.id)
-    if (node.dataset.kind === 'tab' && node.dataset.section === 'pinned') return undefined
+    if (node.dataset.kind === 'pins-start') return move('after', node, true, section(true)[0]?.id)
+    if (node.dataset.kind === 'tabs-start') return move('after', node, false, section(false)[0]?.id)
     if (node.dataset.kind !== 'tab' && node.dataset.kind !== 'folder') return undefined
+    const pinned = node.dataset.section === 'pinned'
+    const list = section(pinned)
     // Inside a folder, the anchor is the folder as a whole.
     const anchorGroup = node.dataset.group
     const anchor = anchorGroup ? (node.closest<HTMLElement>('.folder') ?? node) : node
     if (anchorGroup === groupId) return undefined
     const r = anchor.getBoundingClientRect()
     const before = y < r.top + r.height / 2
-    const firstId = anchorGroup ? tabs.find((e) => e.groupId === anchorGroup)?.id : node.dataset.entry
-    if (before) return move('before', anchor, firstId)
-    const lastId = anchorGroup ? tabs.findLast((e) => e.groupId === anchorGroup)?.id : node.dataset.entry
-    return move('after', anchor, lastId && nextTopLevel(tabs, lastId, undefined, groupId))
+    const firstId = anchorGroup ? list.find((e) => e.groupId === anchorGroup)?.id : node.dataset.entry
+    if (before) return move('before', anchor, pinned, firstId)
+    const lastId = anchorGroup ? list.findLast((e) => e.groupId === anchorGroup)?.id : node.dataset.entry
+    return move('after', anchor, pinned, lastId && nextTopLevel(list, lastId, undefined, groupId))
   }
 
   // The Essentials zone is open while the pointer is above the middle of
@@ -319,7 +324,8 @@ export class Dragger {
   }
 
   private lastListItem(): HTMLElement | undefined {
-    return [...this.root.querySelectorAll<HTMLElement>('.scroll > [data-section="tabs"], .scroll > .folder')].at(-1)
+    const items = this.root.querySelectorAll<HTMLElement>('.scroll > [data-section="tabs"], .scroll > .new-tab')
+    return [...items].at(-1)
   }
 
   // ---- Feedback ----
@@ -376,16 +382,16 @@ function next(list: EntryView[], id: string, skip: string | undefined): string |
 }
 
 // The first entry of the top-level item after `id` (a loose tab, or a
-// folder's first tab), skipping the dragged entry or folder.
+// folder's first tab) in one section, skipping the dragged entry or folder.
 function nextTopLevel(
-  unpinned: EntryView[],
+  list: EntryView[],
   id: string,
   skip: string | undefined,
   skipGroup?: string
 ): string | undefined {
-  const i = unpinned.findIndex((e) => e.id === id)
-  const own = unpinned[i]?.groupId
-  return unpinned
+  const i = list.findIndex((e) => e.id === id)
+  const own = list[i]?.groupId
+  return list
     .slice(i + 1)
     .find((e) => e.id !== skip && (!own || e.groupId !== own) && (!skipGroup || e.groupId !== skipGroup))?.id
 }

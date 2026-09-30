@@ -311,6 +311,8 @@ export class GroveHost {
         })
       case 'ungroup':
         return this.editWorkspace(b, (ws) => M.ungroup(ws, c.groupId))
+      case 'setFolderPinned':
+        return this.editWorkspace(b, (ws) => M.setGroupPinned(ws, c.groupId, c.pinned))
       case 'moveEntry':
         return this.moveEntry(windowId, c.entryId, { section: c.section, beforeId: c.beforeId, groupId: c.groupId })
       case 'moveToWorkspace':
@@ -320,7 +322,7 @@ export class GroveHost {
         this.update((m) => M.placeWorkspace(m, c.workspaceId, c.beforeId))
         return
       case 'moveFolder':
-        return this.editWorkspace(b, (ws) => M.placeGroup(ws, c.groupId, c.beforeId))
+        return this.editWorkspace(b, (ws) => M.placeGroup(ws, c.groupId, c.beforeId, c.pinned))
       case 'switchWorkspace':
         return this.switchWorkspace(windowId, c.workspaceId)
       case 'newWorkspace': {

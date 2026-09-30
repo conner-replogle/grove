@@ -182,7 +182,7 @@ export function moveEntry(ws: Workspace, id: string, to: MoveTarget): Workspace 
   const entry = ws.entries.find((e) => e.id === id)
   if (!entry) return ws
   const rest = ws.entries.filter((e) => e.id !== id)
-  const moved = { ...entry, pinned: to.pinned, groupId: to.pinned ? undefined : to.groupId }
+  const moved = { ...entry, pinned: to.pinned, groupId: to.groupId }
   rest.splice(clamp(to.index, 0, rest.length), 0, moved)
   return normalize({ ...ws, entries: rest })
 }
@@ -200,22 +200,36 @@ export function placeEntry(ws: Workspace, id: string, to: Drop): Workspace {
   const rest = ws.entries.filter((e) => e.id !== id)
   let index = to.beforeId ? rest.findIndex((e) => e.id === to.beforeId) : -1
   if (index < 0) {
-    if (to.pinned) index = rest.filter((e) => e.pinned).length
-    else if (to.groupId) index = rest.findLastIndex((e) => e.groupId === to.groupId) + 1 || rest.length
+    if (to.groupId) index = rest.findLastIndex((e) => e.groupId === to.groupId) + 1 || rest.length
+    else if (to.pinned) index = rest.filter((e) => e.pinned).length
     else index = rest.length
   }
-  return moveEntry(ws, id, { index, pinned: to.pinned, groupId: to.pinned ? undefined : to.groupId })
+  return moveEntry(ws, id, { index, pinned: to.pinned, groupId: to.groupId })
 }
 
 // Moves a whole folder to just before `beforeId` (an entry outside it), or
-// to the end of the list.
-export function placeGroup(ws: Workspace, groupId: string, beforeId?: string): Workspace {
+// to the end of its section: the pins if `pinned` (default: where it is
+// now), else the whole list.
+export function placeGroup(ws: Workspace, groupId: string, beforeId?: string, pinned?: boolean): Workspace {
+  const group = ws.groups.find((g) => g.id === groupId)
   const members = ws.entries.filter((e) => e.groupId === groupId)
-  if (!members.length || members.some((e) => e.id === beforeId)) return ws
+  if (!group || !members.length || members.some((e) => e.id === beforeId)) return ws
+  const inPins = pinned ?? !!group.pinned
   const rest = ws.entries.filter((e) => e.groupId !== groupId)
-  const at = beforeId ? rest.findIndex((e) => e.id === beforeId) : -1
-  rest.splice(at < 0 ? rest.length : at, 0, ...members)
-  return normalize({ ...ws, entries: rest })
+  let at = beforeId ? rest.findIndex((e) => e.id === beforeId) : -1
+  if (at < 0) at = inPins ? rest.filter((e) => e.pinned).length : rest.length
+  rest.splice(at, 0, ...members.map((e) => (e.pinned === inPins ? e : { ...e, pinned: inPins })))
+  const groups = ws.groups.map((g) => (g.id === groupId ? { ...g, pinned: inPins } : g))
+  return normalize({ ...ws, groups, entries: rest })
+}
+
+// Pins a folder (to the end of the pins) or unpins it (to the start of the
+// other tabs), tabs and all.
+export function setGroupPinned(ws: Workspace, groupId: string, pinned: boolean): Workspace {
+  const group = ws.groups.find((g) => g.id === groupId)
+  if (!group || !!group.pinned === pinned) return ws
+  const firstTab = ws.entries.find((e) => !e.pinned && e.groupId !== groupId)?.id
+  return placeGroup(ws, groupId, pinned ? undefined : firstTab, pinned)
 }
 
 // Pinning puts the entry at the end of the pinned tabs; unpinning at the
@@ -235,19 +249,20 @@ export function createGroup(
   title = 'New Folder',
   color?: Color
 ): [Workspace, string] {
+  const members = new Set(entryIds)
+  // The folder takes the place of its first member, and its pin.
+  const first = ws.entries.findIndex((e) => members.has(e.id))
   const group: Group = {
     id: newId(),
     title,
     color: color ?? nextColor(ws.groups.map((g) => g.color)),
-    collapsed: false
+    collapsed: false,
+    pinned: ws.entries[first]?.pinned ?? false
   }
-  const members = new Set(entryIds)
-  // The folder takes the place of its first member.
-  const first = ws.entries.findIndex((e) => members.has(e.id))
   if (first < 0) return [ws, group.id]
   const moved = ws.entries
     .filter((e) => members.has(e.id))
-    .map((e) => ({ ...e, pinned: false, groupId: group.id }))
+    .map((e) => ({ ...e, pinned: group.pinned!, groupId: group.id }))
   const rest = ws.entries.filter((e) => !members.has(e.id))
   const at = ws.entries.slice(0, first).filter((e) => !members.has(e.id)).length
   rest.splice(at, 0, ...moved)
@@ -278,7 +293,8 @@ export function setEntryGroup(ws: Workspace, id: string, groupId: string | undef
   const anchorGroup = groupId ?? entry.groupId
   const lastInGroup = rest.findLastIndex((e) => e.groupId === anchorGroup)
   const index = lastInGroup >= 0 ? lastInGroup + 1 : rest.length
-  return moveEntry(ws, id, { index, pinned: false, groupId })
+  const pinned = !!ws.groups.find((g) => g.id === anchorGroup)?.pinned
+  return moveEntry(ws, id, { index, pinned, groupId })
 }
 
 export function groupEntryIds(ws: Workspace, groupId: string): string[] {
@@ -287,28 +303,32 @@ export function groupEntryIds(ws: Workspace, groupId: string): string[] {
 
 // ---- Invariants ----
 
-// Pinned entries come first and are never in a folder; a folder's entries
-// sit together at the place of its first entry; empty folders, unknown
-// folder ids and a dangling active id are dropped.
+// Pinned entries come first; an entry in a folder is pinned just when its
+// folder is; a folder's entries sit together at the place of its first
+// entry; empty folders, unknown folder ids and a dangling active id are
+// dropped.
 export function normalize(ws: Workspace): Workspace {
-  const groupIds = new Set(ws.groups.map((g) => g.id))
+  const pinnedGroups = new Map(ws.groups.map((g) => [g.id, !!g.pinned]))
   const clean = ws.entries.map((e) => {
-    const groupId = e.pinned || !e.groupId || !groupIds.has(e.groupId) ? undefined : e.groupId
-    return groupId === e.groupId ? e : { ...e, groupId }
+    const inPins = e.groupId === undefined ? undefined : pinnedGroups.get(e.groupId)
+    const groupId = inPins === undefined ? undefined : e.groupId
+    const pinned = inPins ?? e.pinned
+    return groupId === e.groupId && pinned === e.pinned ? e : { ...e, groupId, pinned }
   })
 
-  const pinned = clean.filter((e) => e.pinned)
-  const unpinned: Entry[] = []
-  const placed = new Set<string>()
-  for (const e of clean) {
-    if (e.pinned) continue
-    if (!e.groupId) unpinned.push(e)
-    else if (!placed.has(e.groupId)) {
-      placed.add(e.groupId)
-      unpinned.push(...clean.filter((m) => !m.pinned && m.groupId === e.groupId))
+  const gather = (list: Entry[]): Entry[] => {
+    const out: Entry[] = []
+    const placed = new Set<string>()
+    for (const e of list) {
+      if (!e.groupId) out.push(e)
+      else if (!placed.has(e.groupId)) {
+        placed.add(e.groupId)
+        out.push(...list.filter((m) => m.groupId === e.groupId))
+      }
     }
+    return out
   }
-  const entries = [...pinned, ...unpinned]
+  const entries = [...gather(clean.filter((e) => e.pinned)), ...gather(clean.filter((e) => !e.pinned))]
 
   const used = new Set(entries.map((e) => e.groupId).filter(Boolean))
   const groups = ws.groups.filter((g) => used.has(g.id))

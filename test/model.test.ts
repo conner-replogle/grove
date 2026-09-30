@@ -24,6 +24,7 @@ import {
   recolorWorkspace,
   renameWorkspace,
   setEntryGroup,
+  setGroupPinned,
   setPinned,
   transferEntry,
   ungroup,
@@ -195,10 +196,34 @@ describe('folders', () => {
     expect(titles(w)).toEqual(['a', 'b[F]', 'd[F]', 'c'])
   })
 
-  it('unpins tabs put into a folder', () => {
+  it('a folder made from a pinned tab is pinned', () => {
     let w = ws('*p', 'a')
     ;[w] = createGroup(w, [id(w, 'p')], 'F')
-    expect(titles(w)).toEqual(['p[F]', 'a'])
+    expect(titles(w)).toEqual(['*p[F]', 'a'])
+    expect(w.groups[0].pinned).toBe(true)
+  })
+
+  it('pins and unpins a folder with its tabs', () => {
+    let w = ws('*x', 'a', 'b', 'c')
+    let gid: string
+    ;[w, gid] = createGroup(w, [id(w, 'b'), id(w, 'c')], 'F')
+    w = setGroupPinned(w, gid, true)
+    expect(titles(w)).toEqual(['*x', '*b[F]', '*c[F]', 'a'])
+    expect(setGroupPinned(w, gid, true)).toBe(w)
+    w = setGroupPinned(w, gid, false)
+    expect(titles(w)).toEqual(['*x', 'b[F]', 'c[F]', 'a'])
+  })
+
+  it('a tab dropped into a pinned folder is pinned; out of it, not', () => {
+    let w = ws('*x', 'a', 'b')
+    let gid: string
+    ;[w, gid] = createGroup(w, [id(w, 'x')], 'F')
+    w = placeEntry(w, id(w, 'b'), { pinned: true, groupId: gid })
+    expect(titles(w)).toEqual(['*x[F]', '*b[F]', 'a'])
+    w = placeEntry(w, id(w, 'x'), { pinned: false })
+    expect(titles(w)).toEqual(['*b[F]', 'a', 'x'])
+    w = setEntryGroup(w, id(w, 'a'), gid)
+    expect(titles(w)).toEqual(['*b[F]', '*a[F]', 'x'])
   })
 
   it('renames, recolors and collapses, ignoring blank titles', () => {
@@ -268,7 +293,8 @@ describe('normalize', () => {
       ]
     }
     const w = normalize(broken)
-    expect(titles(w)).toEqual(['*c', 'a[F]', 'd[F]', 'b', 'x'])
+    // c is in unpinned folder g, so it isn't pinned.
+    expect(titles(w)).toEqual(['a[F]', 'c[F]', 'd[F]', 'b', 'x'])
     expect(w.groups.map((x) => x.id)).toEqual(['g'])
     expect(w.activeEntryId).toBeUndefined()
   })
@@ -337,6 +363,14 @@ describe('drag and drop', () => {
     const moved = placeGroup(w, gid(w))
     expect(titles(placeGroup(moved, gid(w), id(moved, 'c')))).toEqual(['*x', 'a[F]', 'b[F]', 'c'])
     expect(placeGroup(w, gid(w), id(w, 'b'))).toBe(w)
+  })
+
+  it('moves a folder into the pins and back', () => {
+    const w = tree()
+    const pinnedEnd = placeGroup(w, gid(w), undefined, true)
+    expect(titles(pinnedEnd)).toEqual(['*x', '*a[F]', '*b[F]', 'c'])
+    expect(titles(placeGroup(w, gid(w), id(w, 'x'), true))).toEqual(['*a[F]', '*b[F]', '*x', 'c'])
+    expect(titles(placeGroup(pinnedEnd, gid(w), undefined, false))).toEqual(['*x', 'c', 'a[F]', 'b[F]'])
   })
 })
 
