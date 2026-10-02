@@ -110,6 +110,69 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 // still shows up as usual).
 chrome.contentSettings.automaticDownloads.set({ primaryPattern: '<all_urls>', setting: 'allow' }).catch(() => {})
 
+// ---- Downloads ----
+
+// The system's icon for each download's file, once there is a file.
+const downloadIcons = new Map()
+const nameFromUrl = (url) => {
+  try {
+    return decodeURIComponent(new URL(url).pathname.split('/').pop() || '') || url
+  } catch {
+    return url
+  }
+}
+const downloadInfo = async (d) => {
+  let icon = downloadIcons.get(d.id)
+  if (!icon && d.filename && d.state === 'complete') {
+    icon = await chrome.downloads.getFileIcon(d.id, { size: 32 }).catch(() => undefined)
+    if (icon) downloadIcons.set(d.id, icon)
+  }
+  return {
+    id: d.id,
+    name: d.filename ? d.filename.split(/[\\/]/).pop() : nameFromUrl(d.finalUrl || d.url),
+    url: d.finalUrl || d.url,
+    state: d.state,
+    paused: d.paused,
+    canResume: d.canResume,
+    received: d.bytesReceived,
+    total: d.totalBytes > 0 ? d.totalBytes : 0,
+    exists: d.exists,
+    error: d.error,
+    startTime: d.startTime,
+    icon
+  }
+}
+const emitDownload = async (id) => {
+  const [d] = await chrome.downloads.search({ id })
+  if (d) emit({ type: 'download', download: await downloadInfo(d) })
+}
+// Chrome says nothing as bytes arrive, so while anything is downloading,
+// look now and then.
+let downloadPoll
+const watchProgress = () => {
+  if (downloadPoll) return
+  downloadPoll = setInterval(async () => {
+    const running = await chrome.downloads.search({ state: 'in_progress' })
+    for (const d of running) emit({ type: 'download', download: await downloadInfo(d) })
+    if (!running.length || running.every((d) => d.paused)) {
+      clearInterval(downloadPoll)
+      downloadPoll = undefined
+    }
+  }, 700)
+}
+chrome.downloads.onCreated.addListener(async (d) => {
+  emit({ type: 'download', download: await downloadInfo(d), created: true })
+  watchProgress()
+})
+chrome.downloads.onChanged.addListener(async ({ id }) => {
+  await emitDownload(id)
+  watchProgress()
+})
+chrome.downloads.onErased.addListener((id) => {
+  downloadIcons.delete(id)
+  emit({ type: 'downloadErased', id })
+})
+
 globalThis.grove = {
   // Called once the host has installed groveEmit.
   ready() {
@@ -157,6 +220,30 @@ globalThis.grove = {
   },
   async remove(tabIds) {
     await chrome.tabs.remove(tabIds)
+  },
+  async downloads() {
+    const list = await chrome.downloads.search({ orderBy: ['-startTime'], limit: 50 })
+    if (list.some((d) => d.state === 'in_progress')) watchProgress()
+    return Promise.all(list.map(downloadInfo))
+  },
+  async downloadAction({ id, action }) {
+    const act = {
+      open: () => chrome.downloads.open(id),
+      show: () => chrome.downloads.show(id),
+      pause: () => chrome.downloads.pause(id),
+      resume: () => chrome.downloads.resume(id),
+      cancel: () => chrome.downloads.cancel(id),
+      remove: () => chrome.downloads.erase({ id }),
+      retry: async () => {
+        const [d] = await chrome.downloads.search({ id })
+        if (d) await chrome.downloads.download({ url: d.url })
+      }
+    }[action]
+    await act?.()
+    if (action !== 'remove') await emitDownload(id)
+  },
+  async clearDownloads() {
+    for (const state of ['complete', 'interrupted']) await chrome.downloads.erase({ state })
   },
   async focusWindow(windowId) {
     await chrome.windows.update(windowId, { focused: true })

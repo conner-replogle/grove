@@ -141,6 +141,66 @@ describe('records', () => {
   })
 })
 
+describe('syncing only pins', () => {
+  const PINS = { unpinnedTabs: false }
+  const setup = () => {
+    const base = model({ Home: ['*mail', 'news'], Work: ['jira'] })
+    const shared: Records = new Map()
+    commit(shared, base, clock('z'))
+    return { base, shared }
+  }
+
+  it("neither sends this device's tabs nor closes other devices'", () => {
+    const { base, shared } = setup()
+    const onPins = copy(shared)
+    // Opens a tab and closes `news`: neither leaves this device.
+    let m = M.withWorkspace(base, base.workspaces[0].id, (w) => M.addEntry(w, { url: 'https://local.test/', title: 'local' })[0])
+    m = M.withWorkspace(m, m.workspaces[0].id, (w) => M.closeEntry(w, w.entries.find((e) => e.title === 'news')!.id))
+    const changed = commit(onPins, m, clock('p'), PINS)
+    expect(changed.size).toBe(0)
+    const elsewhere = copy(shared)
+    merge(elsewhere, onPins)
+    expect(look(materialize(base, elsewhere)).workspaces[0].tabs).toEqual(['*mail', 'news'])
+  })
+
+  it("keeps this device's tabs when other devices' tabs change", () => {
+    const { base, shared } = setup()
+    const onPins = copy(shared)
+    const local = M.withWorkspace(base, base.workspaces[0].id, (w) => M.addEntry(w, { url: 'https://local.test/', title: 'local' })[0])
+    commit(onPins, local, clock('p'), PINS)
+    // Another device closes `news` and opens `far`.
+    const other = copy(shared)
+    let o = M.withWorkspace(base, base.workspaces[0].id, (w) => M.closeEntry(w, w.entries.find((e) => e.title === 'news')!.id))
+    o = M.withWorkspace(o, o.workspaces[1].id, (w) => M.addEntry(w, { url: 'https://far.test/', title: 'far' })[0])
+    commit(other, o, clock('o'))
+    merge(onPins, other)
+    expect(look(materialize(local, onPins, PINS)).workspaces).toEqual([
+      { name: 'Home', tabs: ['*mail', 'news', 'local'] },
+      { name: 'Work', tabs: ['jira'] }
+    ])
+  })
+
+  it('sends an unpin once, and takes other devices’ unpins', () => {
+    const { base, shared } = setup()
+    const home = base.workspaces[0].id
+    const mail = base.workspaces[0].entries[0].id
+    // Unpinned here: other devices see it become an ordinary tab.
+    const onPins = copy(shared)
+    const unpinned = M.withWorkspace(base, home, (w) => M.setPinned(w, mail, false))
+    expect(commit(onPins, unpinned, clock('p'), PINS).has(mail)).toBe(true)
+    expect(commit(onPins, unpinned, clock('p'), PINS).size).toBe(0)
+    const elsewhere = copy(shared)
+    merge(elsewhere, onPins)
+    expect(look(materialize(base, elsewhere)).workspaces[0].tabs).toEqual(['mail', 'news'])
+    // Unpinned elsewhere: here it becomes an ordinary tab, and stays one.
+    const here = copy(shared)
+    merge(here, onPins)
+    const next = materialize(base, here, PINS)
+    expect(look(next).workspaces[0].tabs).toEqual(['mail', 'news'])
+    expect(commit(here, next, clock('q'), PINS).size).toBe(0)
+  })
+})
+
 describe('crypto', () => {
   it('seals so only the same secret opens', async () => {
     const secret = newSecret()

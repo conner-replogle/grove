@@ -2,15 +2,18 @@
 // before its own scripts run. It restyles and extends Webium's components;
 // the tabs underneath are real Chrome tabs.
 import appCss from './styles/app.css'
+import panelsCss from './styles/panels.css'
 import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
 import urlbarResultsCss from './zen/urlbar-results.css'
 import { addStyles, patchMethod } from './patch'
 import { showDomainOnly } from './address'
 import { anchorExtensionsBar } from './extensions-anchor'
+import { showDownloads } from './downloads'
 import { showPausedPages } from './paused'
 import { showPermissionPrompts } from './permission-prompt'
 import { sidebarResizer } from './resize'
+import { showSettings } from './settings'
 import { openUrlBarOnNewTab, releasePageFocus, watchUrlBarPlace } from './urlbar'
 import './sidebar'
 
@@ -23,7 +26,7 @@ declare global {
 if (!window.__grove) {
   window.__grove = { version: 1 }
 
-  addStyles('webui-browser-app', zenTokens + appCss)
+  addStyles('webui-browser-app', zenTokens + appCss + panelsCss)
   addStyles('webui-browser-searchbox', searchboxCss)
   addStyles('cr-searchbox-match', urlbarResultsCss)
   showDomainOnly()
@@ -37,6 +40,8 @@ if (!window.__grove) {
     document.querySelector('webui-browser-app')?.shadowRoot?.querySelector<HTMLElement>('#main') ?? null
   showPausedPages(main)
   showPermissionPrompts(main)
+  showDownloads(main)
+  showSettings(main)
 
   // Webium routes every mousedown in the tab strip into its drag code,
   // which assumes a horizontal strip (and, fed vertical positions, can ask

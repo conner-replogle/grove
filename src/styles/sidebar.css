@@ -477,3 +477,24 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 
 /* Selected here, but showing in another window. */
 .paused { filter: grayscale(1); opacity: 0.55; }
+
+/* Bottom left: downloads (with a ring while anything downloads) and settings. */
+.foot-left { display: flex; gap: 2px; }
+.foot .tbtn svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.downloads-button { position: relative; }
+.downloads-button.active { color: var(--zen-primary-color); }
+.downloads-button.active::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--zen-primary-color) calc(var(--progress) * 360deg),
+    color-mix(in srgb, currentColor 18%, transparent) 0
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+}
+.downloads-button.indeterminate::before { animation: grove-spin 1s linear infinite; }
+.downloads-button.pulse svg { animation: grove-download-pulse 0.5s ease-out 2; }
+@keyframes grove-download-pulse { 50% { transform: translateY(3px) scale(1.15); } }
+@keyframes grove-spin { to { rotate: 360deg; } }

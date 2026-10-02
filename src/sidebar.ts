@@ -10,11 +10,14 @@
 // bottom.
 import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protocol.ts'
 import { COLORS, type Group } from '../shared/types.ts'
+import settingsSvg from 'lucide-static/icons/settings.svg'
 import { Dragger } from './drag'
+import { downloadsButton, type Seen } from './downloads'
 import { send, subscribe } from './host-client'
 import { icons } from './icons'
 import sidebarCss from './styles/sidebar.css'
 import { svg } from './svg'
+import { openSettings } from './settings'
 import { openNewTabSearch } from './urlbar'
 import { applyWorkspaceTheme } from './theme'
 import { COLOR_HEX, colorHex, workspaceEditor, workspaceIcon } from './workspace-editor'
@@ -43,6 +46,7 @@ class GroveSidebar extends HTMLElement {
   // A render that arrived while a drag was under way (it would pull the
   // dragged row out from under the pointer).
   private renderQueued = false
+  private readonly seenDownloads: Seen = { ids: new Set(), primed: false }
 
   connectedCallback(): void {
     const sheet = new CSSStyleSheet()
@@ -250,7 +254,14 @@ class GroveSidebar extends HTMLElement {
     add.title = 'New workspace'
     add.append(svg(icons.plus))
     add.addEventListener('click', () => this.openEditor(undefined))
-    foot.append(el('span', 'tbtn-spacer'), switcher, add)
+    // Bottom left, as in Zen: downloads, and Grove's settings.
+    const left = el('div', 'foot-left')
+    const settings = el('button', 'tbtn')
+    settings.title = 'Settings'
+    settings.append(svg(settingsSvg))
+    settings.addEventListener('click', openSettings)
+    left.append(downloadsButton(s, this.seenDownloads), settings)
+    foot.append(left, switcher, add)
     return foot
   }
 

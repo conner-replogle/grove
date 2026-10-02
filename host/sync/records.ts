@@ -27,6 +27,14 @@ export interface SyncRecord {
 export type Records = Map<string, SyncRecord>
 
 export const META = 'model'
+
+// What this device syncs. Without unpinned tabs, it neither sends its own
+// unpinned tabs and folders nor takes other devices', and the records of
+// them are left alone (another device may still sync them).
+export interface Scope {
+  unpinnedTabs: boolean
+}
+export const ALL: Scope = { unpinnedTabs: true }
 const ESSENTIALS = 'essentials'
 const KINDS: readonly string[] = ['meta', 'workspace', 'entry', 'group']
 
@@ -38,6 +46,14 @@ const str = (r: SyncRecord | undefined, field: string): string | undefined => {
 // Favicons in data URLs can be big; sync only small ones.
 const syncedFavicon = (f: string | undefined): string | null =>
   f && !(f.startsWith('data:') && f.length > 2048) ? f : null
+
+// Whether a record is one this device syncs.
+function inScope(r: SyncRecord | undefined, scope: Scope): boolean {
+  if (!r || scope.unpinnedTabs) return true
+  if (r.kind === 'entry') return str(r, 'parent') === ESSENTIALS || r.f.pinned?.[0] === true
+  if (r.kind === 'group') return r.f.pinned?.[0] === true
+  return true
+}
 
 // ---- Merging ----
 
@@ -95,9 +111,15 @@ interface Wanted {
 }
 
 // What the model says the records should hold, and the lists whose order
-// the records keep.
-function project(model: Model): { wanted: Map<string, Wanted>; lists: string[][] } {
+// the records keep. Out of scope: unpinned tabs and folders, unless their
+// record still says pinned (it just got unpinned here: that goes out, once).
+function project(model: Model, records: Records, scope: Scope): { wanted: Map<string, Wanted>; lists: string[][] } {
   const wanted = new Map<string, Wanted>()
+  const syncs = (id: string, pinned: boolean | undefined): boolean => {
+    if (scope.unpinnedTabs || pinned) return true
+    const r = records.get(id)
+    return isAlive(r) && inScope(r, scope)
+  }
   const entry = (e: Entry, parent: string): Wanted => ({
     kind: 'entry',
     values: {
@@ -114,32 +136,34 @@ function project(model: Model): { wanted: Map<string, Wanted>; lists: string[][]
   const lists: string[][] = [model.workspaces.map((w) => w.id), model.essentials.map((e) => e.id)]
   for (const e of model.essentials) wanted.set(e.id, entry(e, ESSENTIALS))
   for (const ws of model.workspaces) {
-    wanted.set(ws.id, {
-      kind: 'workspace',
-      values: { name: ws.name, color: ws.color, icon: ws.icon ?? null, active: ws.activeEntryId ?? null }
-    })
+    // The active tab may be one other devices don't get.
+    const values: Record<string, Value> = { name: ws.name, color: ws.color, icon: ws.icon ?? null }
+    if (scope.unpinnedTabs) values.active = ws.activeEntryId ?? null
+    wanted.set(ws.id, { kind: 'workspace', values })
     for (const g of ws.groups) {
+      if (!syncs(g.id, g.pinned)) continue
       wanted.set(g.id, {
         kind: 'group',
         values: { parent: ws.id, title: g.title, color: g.color, collapsed: g.collapsed, pinned: !!g.pinned }
       })
     }
-    for (const e of ws.entries) wanted.set(e.id, entry(e, ws.id))
-    lists.push(ws.entries.map((e) => e.id))
+    const entries = ws.entries.filter((e) => syncs(e.id, e.pinned))
+    for (const e of entries) wanted.set(e.id, entry(e, ws.id))
+    lists.push(entries.map((e) => e.id))
   }
   return { wanted, lists }
 }
 
 // Records the model in `records`, stamping what changed. Returns the ids
 // of the records that changed.
-export function commit(records: Records, model: Model, stamp: () => Stamp): Set<string> {
+export function commit(records: Records, model: Model, stamp: () => Stamp, scope: Scope = ALL): Set<string> {
   const changed = new Set<string>()
   let at: Stamp | undefined
   const set = (id: string, rec: SyncRecord, field: string, value: Value): void => {
     rec.f[field] = [value, (at ??= stamp())]
     changed.add(id)
   }
-  const { wanted, lists } = project(model)
+  const { wanted, lists } = project(model, records, scope)
   for (const [id, w] of wanted) {
     let rec = records.get(id)
     if (rec && rec.kind !== w.kind) continue
@@ -159,7 +183,7 @@ export function commit(records: Records, model: Model, stamp: () => Stamp): Set<
     })
   }
   for (const [id, rec] of records) {
-    if (isAlive(rec) && !wanted.has(id)) set(id, rec, 'alive', false)
+    if (isAlive(rec) && !wanted.has(id) && inScope(rec, scope)) set(id, rec, 'alive', false)
   }
   return changed
 }
@@ -173,12 +197,12 @@ const byOrder = ([ia, a]: [string, SyncRecord], [ib, b]: [string, SyncRecord]): 
 }
 
 // The model the records describe. What the records know nothing of (never
-// synced: see adopt) stays, after the synced parts; so does what they
-// don't carry: tabs' back/forward lists.
-export function materialize(model: Model, records: Records): Model {
-  const alive = [...records].filter(([, r]) => isAlive(r))
+// synced: see adopt) or this device doesn't sync (see Scope) stays, after
+// the synced parts; so does what they don't carry: tabs' back/forward lists.
+export function materialize(model: Model, records: Records, scope: Scope = ALL): Model {
+  const alive = [...records].filter(([, r]) => isAlive(r) && inScope(r, scope))
   const aliveOf = (kind: Kind) => alive.filter(([, r]) => r.kind === kind).sort(byOrder)
-  const known = (id: string): boolean => records.has(id)
+  const known = (id: string): boolean => records.has(id) && inScope(records.get(id), scope)
   const localWs = new Map(model.workspaces.map((w) => [w.id, w]))
   const localEntry = new Map<string, Entry>()
   for (const e of model.essentials) localEntry.set(e.id, e)
@@ -199,6 +223,10 @@ export function materialize(model: Model, records: Records): Model {
   const claimed = new Set<string>()
   for (const list of entriesOf.values()) for (const [id] of list) claimed.add(id)
   const unsynced = (e: Entry): boolean => !known(e.id) && !claimed.has(e.id)
+  // A pin or pinned folder another device unpinned leaves this device's
+  // scope as an ordinary tab or folder.
+  const unpinnedElsewhere = (id: string): boolean => records.has(id) && !inScope(records.get(id), scope)
+  const leftover = (e: Entry): Entry => (e.pinned && unpinnedElsewhere(e.id) ? { ...e, pinned: false } : e)
 
   const fromRecord = ([id, r]: [string, SyncRecord], parent: string): Entry => {
     const local = localEntry.get(id)
@@ -221,8 +249,17 @@ export function materialize(model: Model, records: Records): Model {
 
   const essentials = [
     ...(entriesOf.get(ESSENTIALS) ?? []).map((item) => fromRecord(item, ESSENTIALS)),
-    ...model.essentials.filter(unsynced)
+    ...model.essentials.filter((e) => unsynced(e) && !unpinnedElsewhere(e.id))
   ]
+  // An Essential another device made an ordinary tab goes to that tab's
+  // workspace, as a tab of this device's own.
+  const fromEssentials = new Map<string, Entry[]>()
+  for (const e of model.essentials) {
+    if (!unsynced(e) || !unpinnedElsewhere(e.id)) continue
+    const parent = str(records.get(e.id), 'parent')
+    const to = inModel(parent) ? parent : inModel(model.lastActiveWorkspaceId) ? model.lastActiveWorkspaceId : wsIds[0]
+    fromEssentials.set(to, [...(fromEssentials.get(to) ?? []), { ...e, pinned: false }])
+  }
 
   const groupRecords = aliveOf('group')
   const workspaces = wsIds.map((id): Workspace => {
@@ -239,7 +276,7 @@ export function materialize(model: Model, records: Records): Model {
     }
     const icon = synced ? str(synced, 'icon') : local?.icon
     if (icon) ws.icon = icon
-    const active = synced ? str(synced, 'active') : local?.activeEntryId
+    const active = synced && scope.unpinnedTabs ? str(synced, 'active') : local?.activeEntryId
     if (active) ws.activeEntryId = active
 
     const syncedGroups = groupRecords
@@ -255,10 +292,16 @@ export function materialize(model: Model, records: Records): Model {
         }
       })
     const groupIds = new Set(syncedGroups.map((g) => g.id))
-    ws.groups = [...syncedGroups, ...(local?.groups ?? []).filter((g) => !groupIds.has(g.id) && !known(g.id))]
+    ws.groups = [
+      ...syncedGroups,
+      ...(local?.groups ?? [])
+        .filter((g) => !groupIds.has(g.id) && !known(g.id))
+        .map((g) => (g.pinned && unpinnedElsewhere(g.id) ? { ...g, pinned: false } : g))
+    ]
     ws.entries = [
       ...(entriesOf.get(id) ?? []).map((item) => fromRecord(item, id)),
-      ...(local?.entries ?? []).filter(unsynced)
+      ...(local?.entries ?? []).filter(unsynced).map(leftover),
+      ...(fromEssentials.get(id) ?? [])
     ]
     return normalize(ws)
   })
@@ -280,10 +323,11 @@ export function materialize(model: Model, records: Records): Model {
 export function adopt(
   model: Model,
   records: Records,
-  isLive: (entryId: string) => boolean
+  isLive: (entryId: string) => boolean,
+  scope: Scope = ALL
 ): { model: Model; remap: Map<string, string> } {
   const remap = new Map<string, string>()
-  const synced = [...records].filter(([, r]) => isAlive(r))
+  const synced = [...records].filter(([, r]) => isAlive(r) && inScope(r, scope))
   const byName = new Map<string, string>()
   for (const [id, r] of synced) {
     const name = r.kind === 'workspace' ? str(r, 'name')?.trim().toLowerCase() : undefined
@@ -318,5 +362,5 @@ export function adopt(
     essentials: model.essentials.filter((e) => keep(e, ESSENTIALS)),
     lastActiveWorkspaceId: remap.get(model.lastActiveWorkspaceId) ?? model.lastActiveWorkspaceId
   }
-  return { model: materialize(renamed, records), remap }
+  return { model: materialize(renamed, records, scope), remap }
 }

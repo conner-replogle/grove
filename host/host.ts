@@ -4,9 +4,10 @@
 // an entry's page lives in at most one window. Selecting an entry that is
 // open in another window moves the live page here (settled decision 1);
 // workspaces no window shows keep no pages (decision 2).
-import type { EntryView, HostCommand, PermissionDecision, PermissionKind, WindowState } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import * as M from './model.ts'
+import type { Settings } from './settings.ts'
 import { keptByHost, type SitePermissions } from './site-permissions.ts'
 import type { Store } from './store.ts'
 
@@ -32,6 +33,8 @@ export type BridgeEvent =
   | { type: 'windowCreated'; windowId: number }
   | { type: 'windowRemoved'; windowId: number }
   | { type: 'permissionRequest'; id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }
+  | { type: 'download'; download: DownloadView; created?: boolean }
+  | { type: 'downloadErased'; id: number }
 
 export interface Bridge {
   call<T = unknown>(fn: string, arg?: unknown): Promise<T>
@@ -44,6 +47,15 @@ export interface UiSink {
   // Opens the window's URL bar as a new tab's search, as Zen does: no tab
   // until a result is picked, which then opens in a new tab.
   openNewTabSearch(windowId: number): void
+}
+
+// Sync as the settings page drives it (host/sync/manager.ts).
+export interface SyncControl {
+  status(): SyncStatus
+  setup(server: string): Promise<void>
+  join(code: string): Promise<void>
+  off(): void
+  setScope(scope: { unpinnedTabs: boolean }): void
 }
 
 interface Binding {
@@ -90,11 +102,15 @@ export class GroveHost {
   // Permission requests waiting for an answer, oldest first. A window shows
   // the first one its visible tab made.
   private permissions: { id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }[] = []
+  // Chrome's downloads, newest first.
+  private downloads: DownloadView[] = []
   // Whether the user has done anything yet this launch (see resume).
   private userActed = false
 
   // Told of every change the host makes to the model (sync records them).
   onModelChange?: () => void
+  settings?: Settings
+  sync?: SyncControl
 
   private readonly store: Store
   private readonly ui: UiSink
@@ -127,6 +143,7 @@ export class GroveHost {
       }
       this.startup.set(w.id, stray)
     }
+    this.downloads = await bridge.call<DownloadView[]>('downloads').catch(() => [])
     this.pushAll()
     // Windows whose UI said hello before the bridge was up.
     for (const id of this.uiReady) void this.finishStartup(id)
@@ -172,6 +189,17 @@ export class GroveHost {
         return this.queuePush()
       case 'permissionRequest':
         this.permissions.push({ id: e.id, tabId: e.tabId, origin: e.origin, topOrigin: e.topOrigin, kinds: e.kinds })
+        return this.queuePush()
+      case 'download': {
+        const rest = this.downloads.filter((d) => d.id !== e.download.id)
+        const at = this.downloads.findIndex((d) => d.id === e.download.id)
+        if (at < 0) rest.unshift(e.download)
+        else rest.splice(at, 0, e.download)
+        this.downloads = rest.slice(0, 50)
+        return this.queuePush()
+      }
+      case 'downloadErased':
+        this.downloads = this.downloads.filter((d) => d.id !== e.id)
         return this.queuePush()
     }
   }
@@ -399,6 +427,21 @@ export class GroveHost {
         return this.answerPermission(c.id, c.decision)
       case 'deleteWorkspace':
         return this.deleteWorkspace(c.workspaceId)
+      case 'setSettings': {
+        const changed = this.settings?.update(c.settings) ?? {}
+        if (changed.syncTabs) this.sync?.setScope({ unpinnedTabs: changed.syncTabs === 'all' })
+        return this.pushAll()
+      }
+      case 'syncSetup':
+        return this.sync?.setup(c.server)
+      case 'syncJoin':
+        return this.sync?.join(c.code)
+      case 'syncOff':
+        return this.sync?.off()
+      case 'download':
+        return void (await this.bridge?.call('downloadAction', { id: c.id, action: c.action }).catch((e: unknown) => this.log('download', e)))
+      case 'clearDownloads':
+        return void (await this.bridge?.call('clearDownloads').catch(() => {}))
     }
   }
 
@@ -717,7 +760,7 @@ export class GroveHost {
   // device: unless they've started on something here, the first window
   // goes to the workspace and tab they were on there.
   async resume(workspaceId: string, entryId: string | undefined): Promise<void> {
-    if (this.userActed || !this.bridge) return
+    if (this.userActed || !this.bridge || this.settings?.get().resume === false) return
     await this.started()
     const windowId = [...this.windows.keys()][0]
     const b = windowId === undefined ? undefined : this.windows.get(windowId)
@@ -747,6 +790,11 @@ export class GroveHost {
       this.pushQueued = false
       this.pushAll()
     })
+  }
+
+  // Something the windows show besides the model changed (sync's status).
+  refresh(): void {
+    this.queuePush()
   }
 
   private pushAll(): void {
@@ -802,7 +850,10 @@ export class GroveHost {
       essentials: this.model.essentials.map(entryView),
       activeEntryId: b.activeEntryId,
       paused: this.pausedIn(windowId, b),
-      permission: this.permissionIn(windowId, b)
+      permission: this.permissionIn(windowId, b),
+      settings: this.settings?.get() ?? DEFAULT_SETTINGS,
+      sync: this.sync?.status() ?? { state: 'off', pending: 0 },
+      downloads: this.downloads
     }
   }
 }

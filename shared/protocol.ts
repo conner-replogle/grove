@@ -56,6 +56,55 @@ export interface PermissionRequest {
   kinds: PermissionKind[]
 }
 
+// Grove's own settings (<profile>/grove-settings.json).
+export interface GroveSettings {
+  // Sync every tab ('all'), or only workspaces, the Essentials, pins and
+  // pinned folders ('pinned'): this device's other tabs stay here, and
+  // other devices' don't come here.
+  syncTabs: 'all' | 'pinned'
+  // At launch, go to the workspace and tab last used on another device.
+  resume: boolean
+}
+export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true }
+
+export interface SyncStatus {
+  // 'off': not set up. 'error': the server turned this device away.
+  state: 'off' | 'connecting' | 'online' | 'offline' | 'error'
+  server?: string
+  // What's synced now.
+  counts?: { workspaces: number; tabs: number; folders: number }
+  // Changes made here the server doesn't have yet.
+  pending: number
+  lastSync?: number
+  // Joins another device to this sync: '<server>#<secret>'.
+  code?: string
+  // A setup or join under way, and what went wrong with the last one.
+  busy?: 'setup' | 'join'
+  error?: string
+}
+
+// A download, as the sidebar's downloads panel shows it (newest first).
+export interface DownloadView {
+  id: number
+  // The file's name (not its folder), or what the URL says until Chrome
+  // has picked one.
+  name: string
+  url: string
+  state: 'in_progress' | 'interrupted' | 'complete'
+  paused: boolean
+  canResume: boolean
+  received: number
+  // 0 when unknown.
+  total: number
+  // Whether the file is still where it was saved.
+  exists: boolean
+  error?: string
+  startTime: string
+  // The system's icon for the file, as a data URL.
+  icon?: string
+}
+export type DownloadAction = 'open' | 'show' | 'pause' | 'resume' | 'cancel' | 'retry' | 'remove'
+
 export interface WindowState {
   windowId: number
   workspaces: WorkspaceSummary[]
@@ -68,6 +117,9 @@ export interface WindowState {
   activeEntryId?: string
   // A permission the page this window shows is asking for.
   permission?: PermissionRequest
+  settings: GroveSettings
+  sync: SyncStatus
+  downloads: DownloadView[]
 }
 
 export type HostCommand =
@@ -95,6 +147,14 @@ export type HostCommand =
   | { type: 'editWorkspace'; workspaceId: string; name?: string; color?: WorkspaceColor; icon?: string }
   | { type: 'deleteWorkspace'; workspaceId: string }
   | { type: 'answerPermission'; id: string; decision: PermissionDecision }
+  | { type: 'setSettings'; settings: Partial<GroveSettings> }
+  // Starts a new sync account on a server, or joins one with a sync code.
+  | { type: 'syncSetup'; server: string }
+  | { type: 'syncJoin'; code: string }
+  | { type: 'syncOff' }
+  | { type: 'download'; id: number; action: DownloadAction }
+  // Takes finished and failed downloads off the list (the files stay).
+  | { type: 'clearDownloads' }
 
 // The page-side names the launcher installs and calls.
 export const UI_BINDING = 'groveHostCall'

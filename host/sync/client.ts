@@ -9,7 +9,7 @@ import type { Model } from '../../shared/types.ts'
 import { SYNC_PROTOCOL, type ClientMessage, type ServerMessage } from '../../shared/sync-protocol.ts'
 import { deriveKeys, seal, unseal, type SyncKeys } from './crypto.ts'
 import { Clock, newDeviceId, type Stamp } from './hlc.ts'
-import { adopt, commit, materialize, merge, META, parseRecords, serializeRecords, type Records, type SyncRecord } from './records.ts'
+import { ALL, adopt, commit, materialize, merge, META, parseRecords, serializeRecords, type Records, type Scope, type SyncRecord } from './records.ts'
 
 export interface SyncConfig {
   url: string
@@ -67,6 +67,56 @@ export function socketUrl(base: string, account: string): string {
   return u.toString()
 }
 
+export type Connection = 'connecting' | 'online' | 'offline' | 'error'
+
+export interface ClientStatus {
+  state: Connection
+  counts: { workspaces: number; tabs: number; folders: number }
+  pending: number
+  lastSync?: number
+  error?: string
+}
+
+// What alive records there are of each kind.
+export function countRecords(records: Iterable<[string, SyncRecord]>): ClientStatus['counts'] {
+  const counts = { workspaces: 0, tabs: 0, folders: 0 }
+  for (const [, r] of records) {
+    if (r.f.alive?.[0] !== true) continue
+    if (r.kind === 'workspace') counts.workspaces++
+    else if (r.kind === 'entry') counts.tabs++
+    else if (r.kind === 'group') counts.folders++
+  }
+  return counts
+}
+
+// Says hello to a sync server with a secret's account and token: resolves
+// once it answers ready, rejects with what went wrong.
+export async function probe(server: string, secret: string, timeoutMs = 10_000): Promise<void> {
+  const keys = await deriveKeys(secret)
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(socketUrl(server, keys.account))
+    const timer = setTimeout(() => {
+      ws.close()
+      reject(new Error(`no answer from ${server}`))
+    }, timeoutMs)
+    const end = (err?: Error) => {
+      clearTimeout(timer)
+      ws.onclose = ws.onerror = ws.onmessage = null
+      ws.close()
+      if (err) reject(err)
+      else resolve()
+    }
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', v: SYNC_PROTOCOL, token: keys.token, cursor: 0 } satisfies ClientMessage))
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(String(ev.data)) as ServerMessage
+      if (msg.t === 'error') end(new Error(`the server says: ${msg.message}`))
+      else if (msg.t === 'ready') end()
+    }
+    ws.onerror = () => end(new Error(`can't reach ${server} (or it turned this account away)`))
+    ws.onclose = () => end(new Error(`${server} closed the connection`))
+  })
+}
+
 export function loadSyncState(path: string): SavedSyncState | undefined {
   try {
     const s = JSON.parse(readFileSync(path, 'utf8')) as SavedSyncState
@@ -83,6 +133,9 @@ export class SyncClient {
   private readonly log: (...a: unknown[]) => void
   private readonly connect: (url: string) => Socket
   private readonly commitDelayMs: number
+  private readonly onStatus: () => void
+  private scope: Scope
+  private connection: Connection = 'connecting'
 
   private keys?: SyncKeys
   private readonly records: Records
@@ -119,6 +172,9 @@ export class SyncClient {
     log?: (...a: unknown[]) => void
     connect?: (url: string) => Socket
     commitDelayMs?: number
+    scope?: Scope
+    // Told when the status changes.
+    onStatus?: () => void
   }) {
     this.path = opts.statePath
     this.config = opts.config
@@ -126,6 +182,8 @@ export class SyncClient {
     this.log = opts.log ?? (() => {})
     this.connect = opts.connect ?? ((url) => new WebSocket(url) as unknown as Socket)
     this.commitDelayMs = opts.commitDelayMs ?? COMMIT_DELAY_MS
+    this.scope = opts.scope ?? ALL
+    this.onStatus = opts.onStatus ?? (() => {})
     const saved = loadSyncState(this.path)
     this.records = new Map(saved?.records ?? [])
     this.clock = new Clock(saved?.device ?? newDeviceId(), saved?.clock)
@@ -139,6 +197,29 @@ export class SyncClient {
   async start(): Promise<void> {
     this.keys = await deriveKeys(this.config.secret)
     this.open()
+  }
+
+  status(): ClientStatus {
+    return {
+      state: this.connection,
+      counts: countRecords(this.records),
+      pending: this.pending.size + [...this.inflight.values()].reduce((n, ids) => n + ids.length, 0),
+      lastSync: this.lastSync,
+      error: this.fatal
+    }
+  }
+
+  // Changes what this device syncs, from now on.
+  async setScope(scope: Scope): Promise<void> {
+    this.scope = scope
+    if (!this.joined) return
+    // Turning unpinned tabs on sends this device's (commit first), then
+    // brings in other devices'.
+    this.commitLocal()
+    await this.applyRemote()
+    this.commitLocal()
+    await this.push()
+    this.onStatus()
   }
 
   stop(): void {
@@ -174,6 +255,7 @@ export class SyncClient {
     const socket = this.connect(socketUrl(this.config.url, keys.account))
     this.socket = socket
     this.ready = false
+    this.setConnection('connecting')
     socket.onopen = () => this.send({ t: 'hello', v: SYNC_PROTOCOL, token: keys.token, cursor: this.cursor })
     socket.onmessage = (ev) => {
       let msg: ServerMessage
@@ -191,7 +273,9 @@ export class SyncClient {
       this.ready = false
       for (const ids of this.inflight.values()) ids.forEach((id) => this.pending.add(id))
       this.inflight.clear()
-      if (this.stopped || this.fatal) return
+      if (this.stopped) return
+      if (this.fatal) return this.setConnection('error')
+      this.setConnection('offline')
       this.log(`sync: offline, retrying in ${this.retryMs / 1000}s`)
       this.retryTimer = setTimeout(() => this.open(), this.retryMs)
       this.retryMs = Math.min(this.retryMs * 2, 60_000)
@@ -219,8 +303,9 @@ export class SyncClient {
         this.ready = true
         this.retryMs = 1000
         this.lastSync = Date.now()
+        this.setConnection('online')
         if (!this.joined) {
-          const { model, remap } = adopt(this.host.model(), this.records, (id) => this.host.isLive(id))
+          const { model, remap } = adopt(this.host.model(), this.records, (id) => this.host.isLive(id), this.scope)
           this.joined = true
           this.needsApply = false
           await this.host.apply(model, remap)
@@ -247,6 +332,7 @@ export class SyncClient {
         this.cursor = Math.max(this.cursor, msg.seq)
         this.lastSync = Date.now()
         this.saveSoon()
+        this.onStatus()
         return
       case 'error':
         this.log('sync: the server says:', msg.message)
@@ -274,6 +360,8 @@ export class SyncClient {
     const changed = merge(this.records, incoming)
     this.cursor = Math.max(this.cursor, seq)
     this.saveSoon()
+    if (this.ready) this.lastSync = Date.now()
+    this.onStatus()
     if (!changed) return
     if (this.ready && this.joined) await this.applyRemote()
     else this.needsApply = true
@@ -295,16 +383,17 @@ export class SyncClient {
   }
 
   private async applyRemote(): Promise<void> {
-    const next = materialize(this.host.model(), this.records)
+    const next = materialize(this.host.model(), this.records, this.scope)
     await this.host.apply(next, new Map())
   }
 
   private commitLocal(): void {
     if (!this.joined) return
-    const changed = commit(this.records, this.host.model(), () => this.clock.tick())
+    const changed = commit(this.records, this.host.model(), () => this.clock.tick(), this.scope)
     if (!changed.size) return
     changed.forEach((id) => this.pending.add(id))
     this.saveSoon()
+    this.onStatus()
   }
 
   private async push(): Promise<void> {
@@ -317,6 +406,12 @@ export class SyncClient {
       if (!this.inflight.has(id)) return // the connection dropped meanwhile
       if (!this.send({ t: 'push', id, blob })) return
     }
+  }
+
+  private setConnection(c: Connection): void {
+    if (this.connection === c) return
+    this.connection = c
+    this.onStatus()
   }
 
   private async compact(): Promise<void> {
