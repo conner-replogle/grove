@@ -537,13 +537,22 @@
   // Chrome only runs these on a page it got over a sound HTTPS connection,
   // which a blank popup isn't, so the popup loads this site's robots.txt
   // (small, and on the site itself) and makes the call there.
+  //
+  // Signing in with another site (FedCM) is hidden from feature checks, so
+  // sites fall back to their own in-page prompts: Google's One Tap shows its
+  // card in the page instead of asking for FedCM on load, which would open
+  // a window by itself. A FedCM call made anyway gets the popup only from a
+  // click; without one it fails, as Chrome's would with nowhere to show it.
 
+  delete window.IdentityCredential
   for (const name of ['get', 'create']) {
     wrap(globalThis.CredentialsContainer?.prototype, name, (orig, self, args) => {
       const options = args[0]
       const dialog = options && typeof options === 'object' && (options.publicKey || options.identity)
       // Passkey autofill waits quietly for the person to pick one; leave it.
       if (!dialog || options.mediation === 'conditional' || location.protocol !== 'https:') return Reflect.apply(orig, self, args)
+      if (options.identity && !options.publicKey && !userActive())
+        return Promise.reject(new DOMException('Error retrieving a token.', 'NetworkError'))
       const helper = openHelper(`${location.origin}/robots.txt`)
       if (!helper) return Reflect.apply(orig, self, args)
       return new Promise((resolve, reject) => {
