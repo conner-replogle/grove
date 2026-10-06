@@ -2,8 +2,11 @@
 // kept in step with Chrome's real windows and tabs through the bridge
 // extension. Windows never own tabs; each window shows one workspace, and
 // an entry's page lives in at most one window. Selecting an entry that is
-// open in another window moves the live page here (settled decision 1);
-// workspaces no window shows keep no pages (decision 2).
+// open in another window moves the live page here (settled decision 1).
+// Leaving a workspace keeps its pages loaded, as Zen does, so coming back
+// is instant; the idle sweep (unloadIdle) frees pages no window has shown
+// for a while. (Decision 2 had workspaces no window shows keep no pages,
+// which made every return to a workspace reload its tabs from scratch.)
 import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
 import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
@@ -639,14 +642,12 @@ export class GroveHost {
   private async switchWorkspace(windowId: number, workspaceId: string): Promise<void> {
     const b = this.bindWindow(windowId)
     if (b.workspaceId === workspaceId) return
-    const old = b.workspaceId
     const ws = M.getWorkspace(this.model, workspaceId)
     b.workspaceId = workspaceId
     b.activeEntryId = ws.activeEntryId ?? M.mostRecent(ws.entries)?.id
     this.update((m) => ({ ...m, lastActiveWorkspaceId: workspaceId }))
     this.pushAll()
     await this.showActive(windowId)
-    await this.unloadIfHidden(old)
     this.pushAll()
   }
 
