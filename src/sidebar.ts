@@ -163,6 +163,7 @@ class GroveSidebar extends HTMLElement {
       ['Remove from Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: false })],
       ['Pin to this workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: true })],
       'separator',
+      ...unloadItem(e),
       ['Close', () => send({ type: 'close', entryId: e.id })]
     ])
     return tile
@@ -193,6 +194,7 @@ class GroveSidebar extends HTMLElement {
       ...(others.length ? (['separator'] as MenuItem[]) : []),
       ...others.map((w): MenuItem => [`Move to ${w.name}`, () => send({ type: 'moveToWorkspace', entryId: e.id, workspaceId: w.id })]),
       'separator',
+      ...unloadItem(e),
       ['Close', () => send({ type: 'close', entryId: e.id })]
     ])
     return row
@@ -372,3 +374,8 @@ function favicon(e: EntryView): HTMLElement {
 }
 
 customElements.define('grove-sidebar', GroveSidebar)
+
+// Unloading frees a page's memory; selecting the tab reopens it as it was.
+function unloadItem(e: EntryView): MenuItem[] {
+  return e.live ? [['Unload tab', () => send({ type: 'unload', entryId: e.id })]] : []
+}

@@ -64,8 +64,11 @@ export interface GroveSettings {
   syncTabs: 'all' | 'pinned'
   // At launch, go to the workspace and tab last used on another device.
   resume: boolean
+  // Unload a tab no window has shown for this many minutes (0: never).
+  unloadAfter: number
 }
-export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true }
+export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true, unloadAfter: 20 }
+export const UNLOAD_CHOICES = [0, 5, 10, 20, 30, 60, 120]
 
 export interface SyncStatus {
   // 'off': not set up. 'error': the server turned this device away.
@@ -126,6 +129,8 @@ export type HostCommand =
   | { type: 'hello' }
   | { type: 'activate'; entryId: string }
   | { type: 'close'; entryId: string }
+  // Closes an entry's page and keeps the entry; selecting it reopens it.
+  | { type: 'unload'; entryId: string }
   // Closes the window's workspace's tabs, all but its pins (Zen's Clear).
   | { type: 'clearTabs' }
   | { type: 'newTab' }

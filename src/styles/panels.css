@@ -240,6 +240,21 @@ p.grove-settings-hint { margin-bottom: 10px; }
 }
 .grove-settings-error[hidden] { display: none; }
 
+/* A drop-down. */
+.grove-select {
+  flex: none;
+  padding: 5px 8px;
+  border: 1px solid var(--divider-color);
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--zen-toolbar-element-bg);
+  outline: none;
+  cursor: pointer;
+}
+.grove-select:focus-visible { border-color: var(--zen-primary-color); }
+.grove-select option { color: initial; background: initial; }
+
 /* A switch. */
 .grove-toggle {
   appearance: none;

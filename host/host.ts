@@ -25,7 +25,8 @@ export interface BridgeTab {
 }
 
 export type BridgeEvent =
-  | { type: 'tabCreated'; tab: BridgeTab; requestId?: string }
+  // restoredSession: the user reopened a tab Grove had unloaded.
+  | { type: 'tabCreated'; tab: BridgeTab; requestId?: string; restoredSession?: string }
   | { type: 'tabRemoved'; tabId: number; windowId: number; windowClosing: boolean }
   | { type: 'tabUpdated'; tab: BridgeTab }
   | { type: 'tabActivated'; tabId: number; windowId: number }
@@ -106,6 +107,12 @@ export class GroveHost {
   private downloads: DownloadView[] = []
   // Whether the user has done anything yet this launch (see resume).
   private userActed = false
+  // Unloaded entries Chrome can restore whole (back/forward list and all):
+  // entry id -> its recently closed session. For this launch only.
+  private readonly sessions = new Map<string, string>()
+  // When a window last showed each tab (see unloadIdle).
+  private readonly shownAt = new Map<number, number>()
+  private readonly audible = new Set<number>()
 
   // Told of every change the host makes to the model (sync records them).
   onModelChange?: () => void
@@ -144,6 +151,7 @@ export class GroveHost {
       this.startup.set(w.id, stray)
     }
     this.downloads = await bridge.call<DownloadView[]>('downloads').catch(() => [])
+    setInterval(() => void this.unloadIdle(), 60_000)
     this.pushAll()
     // Windows whose UI said hello before the bridge was up.
     for (const id of this.uiReady) void this.finishStartup(id)
@@ -171,7 +179,7 @@ export class GroveHost {
   onBridgeEvent(e: BridgeEvent): void {
     switch (e.type) {
       case 'tabCreated':
-        return this.onTabCreated(e.tab, e.requestId)
+        return this.onTabCreated(e.tab, e.requestId, e.restoredSession)
       case 'tabRemoved':
         return this.onTabRemoved(e.tabId, e.windowClosing)
       case 'tabUpdated':
@@ -251,8 +259,9 @@ export class GroveHost {
     return b
   }
 
-  private onTabCreated(tab: BridgeTab, requestId?: string): void {
+  private onTabCreated(tab: BridgeTab, requestId?: string, restoredSession?: string): void {
     this.tabWindow.set(tab.id, tab.windowId)
+    if (tab.audible) this.audible.add(tab.id)
     if (this.entryOf.has(tab.id)) return
     const req = requestId ? this.requests.get(requestId) : undefined
     if (requestId) this.requests.delete(requestId)
@@ -262,6 +271,20 @@ export class GroveHost {
     }
     if (req?.entryId) {
       this.map(req.entryId, tab.id)
+      this.queuePush()
+      return
+    }
+    // Reopened (Ctrl+Shift+T) after Grove unloaded it: its entry's page again.
+    const unloadedEntry = restoredSession && [...this.sessions].find(([, s]) => s === restoredSession)?.[0]
+    if (unloadedEntry && this.entry(unloadedEntry) && !this.tabOf.has(unloadedEntry)) {
+      this.sessions.delete(unloadedEntry)
+      this.map(unloadedEntry, tab.id)
+      const b = this.bindWindow(tab.windowId)
+      if (tab.active && this.shows(b, unloadedEntry)) this.setActive(tab.windowId, b, unloadedEntry)
+      // An entry of a workspace this window doesn't show goes back to
+      // sleep (after a moment: closing a tab Chrome is still making
+      // crashes Webium).
+      else if (!this.shows(b, unloadedEntry)) setTimeout(() => void this.settle(unloadedEntry, true), 1000)
       this.queuePush()
       return
     }
@@ -307,6 +330,8 @@ export class GroveHost {
     const windowId = this.tabWindow.get(tabId)
     this.tabWindow.delete(tabId)
     this.placeholders.delete(tabId)
+    this.shownAt.delete(tabId)
+    this.audible.delete(tabId)
     this.stopLoading(tabId)
     this.dropPermissions(tabId)
     const entryId = this.entryOf.get(tabId)
@@ -321,6 +346,8 @@ export class GroveHost {
   }
 
   private onTabUpdated(tab: BridgeTab): void {
+    if (tab.audible) this.audible.add(tab.id)
+    else this.audible.delete(tab.id)
     if (tab.status === 'loading') this.startLoading(tab.id)
     else this.stopLoading(tab.id)
     if (tab.url) this.dropPermissions(tab.id, tab.url)
@@ -381,6 +408,8 @@ export class GroveHost {
         return this.activateIn(windowId, c.entryId)
       case 'close':
         return this.closeEntriesEverywhere([c.entryId])
+      case 'unload':
+        return this.unloadByUser(c.entryId)
       case 'clearTabs': {
         const ws = M.getWorkspace(this.model, b.workspaceId)
         return this.closeEntriesEverywhere(ws.entries.filter((e) => !e.pinned).map((e) => e.id))
@@ -458,7 +487,9 @@ export class GroveHost {
   // After an entry changed workspace: windows on another workspace that
   // were showing it move on, and if no window shows its new workspace, its
   // page is unloaded (workspaces no window shows keep no pages).
-  private async settle(entryId: string): Promise<void> {
+  // `strayed`: the page is in a window that doesn't show its workspace,
+  // so it's unloaded even if another window shows that workspace.
+  private async settle(entryId: string, strayed = false): Promise<void> {
     const found = M.findEntry(this.model, entryId)
     if (!found?.workspace) return this.pushAll()
     const home = found.workspace.id
@@ -467,12 +498,7 @@ export class GroveHost {
       await this.afterLoss(windowId)
       if (!b.activeEntryId) await this.showActive(windowId)
     }
-    const tabId = this.tabOf.get(entryId)
-    if (tabId !== undefined && ![...this.windows.values()].some((b) => b.workspaceId === home)) {
-      this.unmap(entryId)
-      await this.keepWindowOpen(this.tabWindow.get(tabId)!, [tabId])
-      await this.closeTabs([tabId])
-    }
+    if (strayed || ![...this.windows.values()].some((b) => b.workspaceId === home)) await this.unload([entryId])
     this.pushAll()
   }
 
@@ -512,7 +538,7 @@ export class GroveHost {
     } else {
       const entry = this.entry(entryId)
       if (!entry) return
-      await this.createTab(windowId, entry.url || NEW_TAB_URL, entryId)
+      if (!(await this.restore(windowId, entryId))) await this.createTab(windowId, entry.url || NEW_TAB_URL, entryId)
     }
     await this.dropPlaceholders(windowId)
     this.pushAll()
@@ -612,21 +638,104 @@ export class GroveHost {
   private async unloadIfHidden(workspaceId: string): Promise<void> {
     if ([...this.windows.values()].some((b) => b.workspaceId === workspaceId)) return
     const ws = this.model.workspaces.find((w) => w.id === workspaceId)
-    const tabs = (ws?.entries ?? []).flatMap((e) => {
-      const t = this.tabOf.get(e.id)
-      return t === undefined ? [] : [t]
-    })
-    for (const tabId of tabs) {
-      const entryId = this.entryOf.get(tabId)
-      if (entryId) this.unmap(entryId)
-    }
+    await this.unload((ws?.entries ?? []).map((e) => e.id))
+  }
+
+  // Closes entries' pages and keeps the entries. Chrome keeps each closed
+  // page as a session, which restore() brings back with its back/forward
+  // list; the least recently used go first, as Chrome forgets the oldest.
+  private async unload(entryIds: string[]): Promise<void> {
+    const entries = entryIds
+      .flatMap((id) => this.entry(id) ?? [])
+      .filter((e) => this.tabOf.has(e.id))
+      .sort((a, b) => a.lastActive - b.lastActive)
+    if (!entries.length) return
+    const tabs = entries.map((e) => this.tabOf.get(e.id)!)
+    const entryOfTab = new Map(entries.map((e, i) => [tabs[i], e.id]))
+    entries.forEach((e) => this.unmap(e.id))
     const byWindow = new Map<number, number[]>()
     for (const t of tabs) {
       const w = this.tabWindow.get(t)!
       byWindow.set(w, [...(byWindow.get(w) ?? []), t])
     }
     for (const [w, ids] of byWindow) await this.keepWindowOpen(w, ids)
-    await this.closeTabs(tabs)
+    tabs.forEach((t) => this.closingByHost.add(t))
+    const sessions = await this.bridge!.call<Record<string, string>>('unload', tabs).catch((e: unknown) => {
+      this.log('unload failed', e)
+      return {}
+    })
+    for (const [tabId, sessionId] of Object.entries(sessions)) {
+      const entryId = entryOfTab.get(Number(tabId))
+      if (entryId) this.sessions.set(entryId, sessionId)
+    }
+    this.pushAll()
+  }
+
+  // Reopens an unloaded entry's page whole, if Chrome still has it.
+  private async restore(windowId: number, entryId: string): Promise<boolean> {
+    const sessionId = this.sessions.get(entryId)
+    if (!sessionId) return false
+    this.sessions.delete(entryId)
+    const requestId = `r${this.nextRequest++}`
+    this.requests.set(requestId, { entryId })
+    const tab = await this.bridge!.call<BridgeTab | null>('restore', { sessionId, windowId, requestId }).catch(() => null)
+    if (!tab) this.requests.delete(requestId)
+    return !!tab
+  }
+
+  // Unload, from the tab's menu. A window showing it moves on to another
+  // tab first.
+  private async unloadByUser(entryId: string): Promise<void> {
+    if (!this.tabOf.has(entryId)) return
+    for (const [windowId, b] of this.windows) {
+      if (b.activeEntryId !== entryId) continue
+      await this.afterLoss(windowId)
+      if (b.activeEntryId) continue
+      const ws = M.getWorkspace(this.model, b.workspaceId)
+      const next = M.mostRecent(ws.entries, entryId)
+      // The workspace's only tab stays.
+      if (!next) {
+        b.activeEntryId = entryId
+        return this.pushAll()
+      }
+      await this.activateIn(windowId, next.id)
+    }
+    await this.unload([entryId])
+  }
+
+  // Unloads tabs no window has shown for the minutes in the settings, but
+  // not one playing sound, asking for a permission, or holding text the
+  // user typed and hasn't sent.
+  private async unloadIdle(): Promise<void> {
+    const minutes = this.settings?.get().unloadAfter ?? DEFAULT_SETTINGS.unloadAfter
+    if (!this.bridge || this.startup.size) return
+    this.noteShown()
+    if (!minutes) return
+    const now = Date.now()
+    const idle: string[] = []
+    for (const [entryId, tabId] of this.tabOf) {
+      const since = this.shownAt.get(tabId)
+      if (since === undefined) this.shownAt.set(tabId, now)
+      else if (now - since >= minutes * 60_000 && !this.audible.has(tabId) && !this.permissions.some((p) => p.tabId === tabId)) {
+        idle.push(entryId)
+      }
+    }
+    const keep = await Promise.all(idle.map((id) => this.bridge!.call<boolean>('edited', this.tabOf.get(id)).catch(() => true)))
+    // Shown again while that was asked.
+    const shown = new Set([...this.windows.values()].map((b) => b.activeEntryId))
+    const go = idle.filter((id, i) => !keep[i] && !shown.has(id) && this.tabOf.has(id))
+    if (!go.length) return
+    this.log(`unloading ${go.length} idle tab(s)`)
+    await this.unload(go)
+  }
+
+  // The tabs windows show now count as just seen.
+  private noteShown(): void {
+    const now = Date.now()
+    for (const b of this.windows.values()) {
+      const t = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+      if (t !== undefined) this.shownAt.set(t, now)
+    }
   }
 
   // Chrome closes a window when its last tab leaves; give it a placeholder.
@@ -663,7 +772,10 @@ export class GroveHost {
   }
 
   private closeEntries(ids: string[]): void {
-    ids.forEach((id) => this.snapshots.delete(id))
+    ids.forEach((id) => {
+      this.snapshots.delete(id)
+      this.sessions.delete(id)
+    })
     this.update((m) => M.removeEntries(m, ids))
   }
 
@@ -675,6 +787,9 @@ export class GroveHost {
   }
 
   private setActive(_windowId: number, b: Binding, entryId: string): void {
+    // The tab the window showed until now was last seen just now.
+    const was = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+    if (was !== undefined) this.shownAt.set(was, Date.now())
     b.activeEntryId = entryId
     if (!M.findEntry(this.model, entryId)?.workspace) {
       // An Essential: the workspace keeps its own last tab.
@@ -798,6 +913,7 @@ export class GroveHost {
   }
 
   private pushAll(): void {
+    this.noteShown()
     for (const id of this.windows.keys()) this.push(id)
   }
 

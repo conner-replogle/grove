@@ -32,3 +32,38 @@ document.addEventListener(REQUEST, (e) => {
     () => reply(id, 'dismiss')
   )
 })
+
+// ---- Unsaved input ----
+// Grove unloads tabs left alone for a while, but not one whose page holds
+// text the user typed and hasn't sent: a field they typed into that still
+// has something in it (a message box that's been sent and emptied doesn't
+// count). Only frames with such text answer.
+const typedInto = new Set()
+const TEXT_INPUTS = /^(text|search|email|url|tel|password|number|)$/
+// Fields left the page are forgotten (strong references: a WeakRef to a
+// DOM node's wrapper can come back empty while the node is still there).
+const forgetDetached = () => {
+  for (const el of typedInto) if (!el.isConnected) typedInto.delete(el)
+}
+document.addEventListener(
+  'input',
+  (e) => {
+    const target = e.composedPath()[0]
+    if (!e.isTrusted || !(target instanceof Element)) return
+    forgetDetached()
+    typedInto.add(target)
+  },
+  true
+)
+// (Not "differs from its default": React keeps a field's default in step
+// with its value.)
+const holdsText = (el) => {
+  if (el instanceof HTMLTextAreaElement) return !!el.value.trim()
+  if (el instanceof HTMLInputElement) return TEXT_INPUTS.test(el.type) && !!el.value.trim()
+  return el.isContentEditable && !!el.textContent.trim()
+}
+chrome.runtime.onMessage.addListener((message, _sender, respond) => {
+  if (!message?.groveEdited) return
+  forgetDetached()
+  if ([...typedInto].some(holdsText)) respond(true)
+})
