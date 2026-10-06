@@ -190,6 +190,21 @@ const host = new GroveHost(
       const sessionId = sessionOfWindow(windowId)
       if (!sessionId) return
       cdp.send('Runtime.evaluate', { expression: `window.${UI_RECEIVER}?.openNewTabSearch()` }, sessionId).catch(() => {})
+    },
+    suggestions(windowId, input, list) {
+      const sessionId = sessionOfWindow(windowId)
+      if (!sessionId) return
+      const expression = `window.${UI_RECEIVER}?.suggestions(${JSON.stringify(input)}, ${JSON.stringify(list)})`
+      cdp.send('Runtime.evaluate', { expression }, sessionId).catch(() => {})
+    },
+    // A click from DevTools goes through Chrome's input handling like a real
+    // one, which is what gives the window's UI the keyboard back from a page.
+    async click(windowId, x, y) {
+      const sessionId = sessionOfWindow(windowId)
+      if (!sessionId) return
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, sessionId).catch(() => {})
+      }
     }
   },
   log,

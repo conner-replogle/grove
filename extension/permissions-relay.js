@@ -67,3 +67,25 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   forgetDetached()
   if ([...typedInto].some(holdsText)) respond(true)
 })
+
+// ---- First paint ----
+// Until a new tab's page draws, Webium shows nothing where it goes, and the
+// desktop shows through the window. Grove covers it until the page has
+// drawn: say so once, on its first paint, or on load for a page that
+// painted nothing a paint entry records (a blank page).
+if (window === window.top) {
+  let told = false
+  const tell = () => {
+    if (told) return
+    told = true
+    chrome.runtime.sendMessage({ grovePainted: true }).catch(() => {})
+  }
+  try {
+    new PerformanceObserver((list, observer) => {
+      if (!list.getEntries().length) return
+      observer.disconnect()
+      tell()
+    }).observe({ type: 'paint', buffered: true })
+  } catch {}
+  addEventListener('load', () => requestAnimationFrame(() => requestAnimationFrame(tell)), { once: true })
+}

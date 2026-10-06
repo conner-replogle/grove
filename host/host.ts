@@ -4,7 +4,8 @@
 // an entry's page lives in at most one window. Selecting an entry that is
 // open in another window moves the live page here (settled decision 1);
 // workspaces no window shows keep no pages (decision 2).
-import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
+import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import * as M from './model.ts'
 import type { Settings } from './settings.ts'
@@ -36,6 +37,9 @@ export type BridgeEvent =
   | { type: 'permissionRequest'; id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }
   | { type: 'download'; download: DownloadView; created?: boolean }
   | { type: 'downloadErased'; id: number }
+  | { type: 'tabPainted'; tabId: number }
+  | { type: 'historyVisited'; item: HistoryItem }
+  | { type: 'historyRemoved'; all: boolean; urls: string[] }
 
 export interface Bridge {
   call<T = unknown>(fn: string, arg?: unknown): Promise<T>
@@ -48,6 +52,10 @@ export interface UiSink {
   // Opens the window's URL bar as a new tab's search, as Zen does: no tab
   // until a result is picked, which then opens in a new tab.
   openNewTabSearch(windowId: number): void
+  // History suggestions for what the window's URL bar holds.
+  suggestions(windowId: number, input: string, suggestions: HistorySuggestion[]): void
+  // A left click at (x, y) in the window's UI, as the user's own would be.
+  click(windowId: number, x: number, y: number): void
 }
 
 // Sync as the settings page drives it (host/sync/manager.ts).
@@ -113,6 +121,9 @@ export class GroveHost {
   // When a window last showed each tab (see unloadIdle).
   private readonly shownAt = new Map<number, number>()
   private readonly audible = new Set<number>()
+  // Tabs whose page has drawn (or finished loading); see EntryView.painted.
+  private readonly painted = new Set<number>()
+  readonly history = new HistoryIndex()
 
   // Told of every change the host makes to the model (sync records them).
   onModelChange?: () => void
@@ -143,6 +154,7 @@ export class GroveHost {
       const stray: number[] = []
       for (const tab of w.tabs) {
         this.tabWindow.set(tab.id, w.id)
+        if (tab.status === 'complete') this.painted.add(tab.id)
         // The new-tab page Chrome opens at start-up gives way to the
         // workspace's own tabs, unless the workspace is empty.
         if (isNewTabPage(tab.url) && ws.entries.length) stray.push(tab.id)
@@ -151,6 +163,13 @@ export class GroveHost {
       this.startup.set(w.id, stray)
     }
     this.downloads = await bridge.call<DownloadView[]>('downloads').catch(() => [])
+    void bridge
+      .call<HistoryItem[]>('history')
+      .then((items) => {
+        this.history.load(items)
+        this.log(`history: ${this.history.size} pages`)
+      })
+      .catch((e: unknown) => this.log('history', e))
     setInterval(() => void this.unloadIdle(), 60_000)
     this.pushAll()
     // Windows whose UI said hello before the bridge was up.
@@ -209,6 +228,16 @@ export class GroveHost {
       case 'downloadErased':
         this.downloads = this.downloads.filter((d) => d.id !== e.id)
         return this.queuePush()
+      case 'tabPainted':
+        if (!this.tabWindow.has(e.tabId) || this.painted.has(e.tabId)) return
+        this.painted.add(e.tabId)
+        return this.queuePush()
+      case 'historyVisited':
+        return this.history.visit(e.item)
+      case 'historyRemoved':
+        if (e.all) this.history.clear()
+        else this.history.remove(e.urls)
+        return
     }
   }
 
@@ -292,12 +321,14 @@ export class GroveHost {
     // until the search opens one, so this one goes and the search opens.
     // (A window's only tab stays: something has to show.)
     if (tab.active && isNewTabPage(tab.url) && this.tabsIn(tab.windowId).length > 1) {
-      this.ui.openNewTabSearch(tab.windowId)
-      // Back to the page the window showed, then close the new tab: closing
-      // it while Chrome is still making it crashes Webium.
+      // Back to the page the window showed first, then the search: switching
+      // tabs gives the page the keyboard, which would take it from the
+      // search. Then close the new tab: closing it while Chrome is still
+      // making it crashes Webium.
       const back = this.bindWindow(tab.windowId).activeEntryId
       const backTab = back ? this.tabOf.get(back) : undefined
-      if (backTab !== undefined) void this.bridge!.call('activate', backTab).catch(() => {})
+      const reactivated = backTab !== undefined ? this.bridge!.call('activate', backTab).catch(() => {}) : Promise.resolve()
+      void reactivated.then(() => this.ui.openNewTabSearch(tab.windowId))
       setTimeout(() => void this.closeTabs([tab.id]), 500)
       return
     }
@@ -332,6 +363,7 @@ export class GroveHost {
     this.placeholders.delete(tabId)
     this.shownAt.delete(tabId)
     this.audible.delete(tabId)
+    this.painted.delete(tabId)
     this.stopLoading(tabId)
     this.dropPermissions(tabId)
     const entryId = this.entryOf.get(tabId)
@@ -350,6 +382,8 @@ export class GroveHost {
     else this.audible.delete(tab.id)
     if (tab.status === 'loading') this.startLoading(tab.id)
     else this.stopLoading(tab.id)
+    // Chrome's own pages run no content scripts to say they painted.
+    if (tab.status === 'complete') this.painted.add(tab.id)
     if (tab.url) this.dropPermissions(tab.id, tab.url)
     const entryId = this.entryOf.get(tab.id)
     if (!entryId) return this.queuePush()
@@ -471,6 +505,15 @@ export class GroveHost {
         return void (await this.bridge?.call('downloadAction', { id: c.id, action: c.action }).catch((e: unknown) => this.log('download', e)))
       case 'clearDownloads':
         return void (await this.bridge?.call('clearDownloads').catch(() => {}))
+      case 'suggest':
+        return this.ui.suggestions(windowId, c.input, this.history.suggest(c.input))
+      case 'open':
+        return this.open(windowId, c.url, c.newTab)
+      case 'forgetUrl':
+        this.history.remove([c.url])
+        return void (await this.bridge?.call('forgetUrl', c.url).catch(() => {}))
+      case 'claimKeyboard':
+        return this.ui.click(windowId, c.x, c.y)
     }
   }
 
@@ -555,6 +598,23 @@ export class GroveHost {
     // Chrome has made the new tab active (and given its page the keyboard):
     // open the URL bar, as Zen does for a new tab.
     this.ui.focusUrlBar(windowId)
+    await this.dropPlaceholders(windowId)
+    this.pushAll()
+  }
+
+  // Opens a URL bar suggestion of Grove's own: in the window's tab, or in a
+  // new tab next to the others, as New Tab's search does.
+  private async open(windowId: number, url: string, newTab: boolean): Promise<void> {
+    const b = this.bindWindow(windowId)
+    const tabId = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+    if (!newTab && tabId !== undefined && this.tabWindow.get(tabId) === windowId) {
+      await this.bridge!.call('navigate', { tabId, url })
+      return
+    }
+    let entry!: Entry
+    this.update((m) => M.withWorkspace(m, b.workspaceId, (ws) => ([ws, entry] = M.addEntry(ws, { url, title: url }))[0]))
+    this.setActive(windowId, b, entry.id)
+    await this.createTab(windowId, url, entry.id)
     await this.dropPlaceholders(windowId)
     this.pushAll()
   }
@@ -949,7 +1009,8 @@ export class GroveHost {
         groupId: e.groupId,
         live: t !== undefined,
         here: t !== undefined && this.tabWindow.get(t) === windowId,
-        loading: t !== undefined && this.loading.has(t)
+        loading: t !== undefined && this.loading.has(t),
+        painted: t !== undefined && this.painted.has(t)
       }
     }
     return {

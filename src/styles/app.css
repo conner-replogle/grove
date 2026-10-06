@@ -384,3 +384,15 @@ webui-browser-bookmark-bar { display: none !important; }
   background: var(--zen-primary-color);
 }
 .grove-permission-allow:hover { filter: brightness(1.08); }
+
+/* ---- A page that hasn't drawn yet (loading-cover.ts) ---- */
+
+/* Over the page's empty surface (which nothing behind it shows through),
+ * the card's own background. Clicks go through to the page. */
+.grove-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  background: light-dark(#fff, rgb(32, 32, 32));
+}

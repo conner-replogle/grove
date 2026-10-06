@@ -12,6 +12,8 @@ import { patchMethod } from './patch'
 type SearchboxInput = Element & { shadowRoot: ShadowRoot }
 
 let fullText = ''
+// Grove is setting the field's text itself (not Chrome, with the page's address).
+let own = false
 const wired = new WeakSet<Element>()
 
 export function sidebarAddress(url: string): string {
@@ -24,15 +26,26 @@ export function sidebarAddress(url: string): string {
   }
 }
 
-// The field's full address, whatever it shows.
+// The page's full address as Chrome last set it, whatever the field shows.
 export function addressText(): string {
   return fullText
+}
+
+// Sets the field's text for Grove's own reasons (an empty search), leaving
+// addressText() the page's address.
+export function setOwnText(field: (Element & { setInputText?(t: string): void }) | null, text: string): void {
+  own = true
+  try {
+    field?.setInputText?.(text)
+  } finally {
+    own = false
+  }
 }
 
 export function showDomainOnly(): void {
   patchMethod<[string], unknown, SearchboxInput>('cr-searchbox-input', 'onSetInputText_', function (original, text) {
     const result = original(text)
-    fullText = text
+    if (!own) fullText = text
     wire(this)
     if (!this.matches(':focus-within')) shorten(this)
     return result

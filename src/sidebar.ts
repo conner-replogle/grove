@@ -123,7 +123,7 @@ class GroveSidebar extends HTMLElement {
     newTab.dataset.kind = 'tabs-start'
     newTab.append(iconEl('favicon icon', icons.plus), el('span', 'label', 'New Tab'))
     newTab.addEventListener('click', () => {
-      openNewTabSearch()
+      openNewTabSearch('click')
     })
     scroll.append(newTab)
 

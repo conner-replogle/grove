@@ -1,7 +1,7 @@
 // The UI's line to the Grove host (the launcher). The host pushes this
 // window's state through window.__groveHost.update(); the UI sends commands
 // through the groveHostCall binding the launcher installs in the page.
-import { UI_BINDING, UI_RECEIVER, type HostCommand, type WindowState } from '../shared/protocol.ts'
+import { UI_BINDING, UI_RECEIVER, type HistorySuggestion, type HostCommand, type WindowState } from '../shared/protocol.ts'
 
 type Listener = (state: WindowState) => void
 
@@ -19,6 +19,12 @@ export function onFocusUrlBar(fn: () => void): void {
 export function onOpenNewTabSearch(fn: () => void): void {
   newTabSearchListeners.add(fn)
 }
+const suggestionListeners = new Set<(input: string, list: HistorySuggestion[]) => void>()
+
+// Calls `fn` with the host's history suggestions for what the URL bar held.
+export function onSuggestions(fn: (input: string, list: HistorySuggestion[]) => void): void {
+  suggestionListeners.add(fn)
+}
 let last: WindowState | undefined
 
 ;(window as unknown as Record<string, unknown>)[UI_RECEIVER] = {
@@ -31,6 +37,9 @@ let last: WindowState | undefined
   },
   openNewTabSearch() {
     newTabSearchListeners.forEach((l) => l())
+  },
+  suggestions(input: string, list: HistorySuggestion[]) {
+    suggestionListeners.forEach((l) => l(input, list))
   }
 }
 
