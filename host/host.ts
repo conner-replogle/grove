@@ -7,7 +7,7 @@
 // is instant; the idle sweep (unloadIdle) frees pages no window has shown
 // for a while. (Decision 2 had workspaces no window shows keep no pages,
 // which made every return to a workspace reload its tabs from scratch.)
-import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type UpdateStatus, type WindowState } from '../shared/protocol.ts'
 import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import * as M from './model.ts'
@@ -59,6 +59,12 @@ export interface UiSink {
   suggestions(windowId: number, input: string, suggestions: HistorySuggestion[]): void
   // A left click at (x, y) in the window's UI, as the user's own would be.
   click(windowId: number, x: number, y: number): void
+}
+
+// Updates as the windows drive them (host/updates.ts).
+export interface UpdateControl {
+  status(): UpdateStatus
+  install(): Promise<void>
 }
 
 // Sync as the settings page drives it (host/sync/manager.ts).
@@ -132,6 +138,11 @@ export class GroveHost {
   onModelChange?: () => void
   settings?: Settings
   sync?: SyncControl
+  updates?: UpdateControl
+  // Quits Grove and starts it again (the launcher's).
+  restart?: () => void
+  // An update offer the user put away, by version, until the next launch.
+  private dismissedUpdate?: string
 
   private readonly store: Store
   private readonly ui: UiSink
@@ -517,6 +528,13 @@ export class GroveHost {
         return void (await this.bridge?.call('forgetUrl', c.url).catch(() => {}))
       case 'claimKeyboard':
         return this.ui.click(windowId, c.x, c.y)
+      case 'installUpdate':
+        return this.updates?.install()
+      case 'restartForUpdate':
+        return this.restart?.()
+      case 'dismissUpdate':
+        this.dismissedUpdate = this.updates?.status().version
+        return this.pushAll()
     }
   }
 
@@ -983,6 +1001,13 @@ export class GroveHost {
     if (b) this.ui.push(windowId, this.view(windowId, b))
   }
 
+  private updateOffer(): UpdateStatus | undefined {
+    const u = this.updates?.status()
+    if (!u || u.state === 'none') return undefined
+    if (u.state === 'available' && u.version === this.dismissedUpdate) return undefined
+    return u
+  }
+
   private pausedIn(windowId: number, b: Binding): WindowState['paused'] {
     const entryId = b.activeEntryId
     const tabId = entryId ? this.tabOf.get(entryId) : undefined
@@ -1011,7 +1036,7 @@ export class GroveHost {
         live: t !== undefined,
         here: t !== undefined && this.tabWindow.get(t) === windowId,
         loading: t !== undefined && this.loading.has(t),
-        painted: t !== undefined && this.painted.has(t)
+        painted: t !== undefined && (this.painted.has(t) || (!this.loading.has(t) && !/^https?:/.test(e.url)))
       }
     }
     return {
@@ -1031,7 +1056,8 @@ export class GroveHost {
       permission: this.permissionIn(windowId, b),
       settings: this.settings?.get() ?? DEFAULT_SETTINGS,
       sync: this.sync?.status() ?? { state: 'off', pending: 0 },
-      downloads: this.downloads
+      downloads: this.downloads,
+      update: this.updateOffer()
     }
   }
 }

@@ -23,7 +23,7 @@
 //   GROVE_PROFILE  the profile directory  (default ~/.config/grove-webium)
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +32,7 @@ import { SitePermissions } from '../host/site-permissions.ts'
 import { Store } from '../host/store.ts'
 import { Settings } from '../host/settings.ts'
 import { SyncManager } from '../host/sync/manager.ts'
+import { Updater } from '../host/updates.ts'
 import { UI_BINDING, UI_RECEIVER } from '../shared/protocol.ts'
 import { PipeCDP } from './cdp.mjs'
 
@@ -150,9 +151,17 @@ const chrome = spawn(
   ],
   { stdio: ['ignore', 'ignore', dev ? 'inherit' : 'ignore', 'pipe', 'pipe'] }
 )
+// Set when Grove quits to restart (into an update): the launcher starts a
+// new Grove once Chrome has gone (and released the profile).
+let relaunch = false
 chrome.on('exit', (code) => {
   host.flush()
   sync.flush()
+  if (relaunch) {
+    const bin = join(home, '.local/bin/grove')
+    const [cmd, args] = existsSync(bin) ? [bin, []] : [process.execPath, [fileURLToPath(import.meta.url)]]
+    spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref()
+  }
   process.exit(code ?? 0)
 })
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => chrome.kill('SIGTERM'))
@@ -229,6 +238,19 @@ const sync = new SyncManager({
 })
 host.settings = settings
 host.sync = sync
+
+// Newer releases (host/updates.ts), offered in the windows.
+const updater = new Updater({
+  appDir: fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, ''),
+  onChange: () => host.refresh(),
+  log: (...a) => console.log('[grove]', ...a)
+})
+host.updates = updater
+host.restart = () => {
+  relaunch = true
+  cdp.send('Browser.close').catch(() => chrome.kill('SIGTERM'))
+}
+updater.start()
 host.onModelChange = () => sync.localChanged()
 
 // DevTools can't say which window a chrome://webui-browser page belongs to

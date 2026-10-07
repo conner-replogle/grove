@@ -111,6 +111,21 @@ export interface DownloadView {
 }
 export type DownloadAction = 'open' | 'show' | 'pause' | 'resume' | 'cancel' | 'retry' | 'remove'
 
+// A newer Grove release (host/updates.ts).
+export interface UpdateStatus {
+  // 'available': a newer release is out; 'downloading': installing it;
+  // 'ready': installed, runs once Grove restarts; 'error': installing failed.
+  state: 'none' | 'available' | 'downloading' | 'ready' | 'error'
+  current: string
+  version?: string
+  notes?: string
+  url?: string
+  error?: string
+  // This copy was installed (install.sh or an update) and can update itself;
+  // a checkout run with pnpm dev can't.
+  installed: boolean
+}
+
 export interface WindowState {
   windowId: number
   workspaces: WorkspaceSummary[]
@@ -126,6 +141,7 @@ export interface WindowState {
   settings: GroveSettings
   sync: SyncStatus
   downloads: DownloadView[]
+  update?: UpdateStatus
 }
 
 export type HostCommand =
@@ -175,6 +191,10 @@ export type HostCommand =
   // keyboard focus from the page to the window's UI. Focusing the field
   // from script doesn't.
   | { type: 'claimKeyboard'; x: number; y: number }
+  // Updates: install the release on offer, then restart into it.
+  | { type: 'installUpdate' }
+  | { type: 'restartForUpdate' }
+  | { type: 'dismissUpdate' }
 
 // A history suggestion for the URL bar (host/history-index.ts).
 export interface HistorySuggestion {

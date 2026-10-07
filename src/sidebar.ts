@@ -19,6 +19,7 @@ import sidebarCss from './styles/sidebar.css'
 import { svg } from './svg'
 import { openSettings } from './settings'
 import { openNewTabSearch } from './urlbar'
+import { updateNotice } from './update-notice'
 import { applyWorkspaceTheme } from './theme'
 import { COLOR_HEX, colorHex, workspaceEditor, workspaceIcon } from './workspace-editor'
 import folderSvg from './zen/folder-icon.svg'
@@ -129,7 +130,7 @@ class GroveSidebar extends HTMLElement {
 
     scroll.append(...this.items(tabs, s, 'tabs'))
 
-    this.body.replaceChildren(scroll, this.foot(s))
+    this.body.replaceChildren(...[scroll, updateNotice(s.update), this.foot(s)].filter((n): n is HTMLElement => !!n))
     scroll.scrollTop = scrollTop
   }
 
