@@ -185,6 +185,8 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
   place-items: center;
 }
 .tab:hover .close { display: grid; }
+.folder-header:hover .close { display: grid; }
+.folder-delete.armed { display: grid; color: #e5484d; background: color-mix(in srgb, #e5484d 15%, transparent); }
 .close:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 .close:active { background: color-mix(in srgb, currentColor 20%, transparent); }
 

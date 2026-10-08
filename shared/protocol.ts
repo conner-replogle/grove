@@ -146,6 +146,7 @@ export type HostCommand =
   | { type: 'newFolder'; entryId: string }
   | { type: 'toggleFolder'; groupId: string }
   | { type: 'ungroup'; groupId: string }
+  | { type: 'deleteFolder'; groupId: string }
   | { type: 'setFolderPinned'; groupId: string; pinned: boolean }
   // Drag and drop: `beforeId` is the entry the dragged one lands in front
   // of; without it, the end of the section (or of the folder `groupId`).

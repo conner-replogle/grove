@@ -231,9 +231,11 @@ class GroveSidebar extends HTMLElement {
           () => send({ type: 'setFolderPinned', groupId: group.id, pinned: !group.pinned })
         ],
         'separator',
-        ['Ungroup', () => send({ type: 'ungroup', groupId: group.id })]
+        ['Ungroup', () => send({ type: 'ungroup', groupId: group.id })],
+        [`Delete folder and ${tabCount(members.length)}`, () => send({ type: 'deleteFolder', groupId: group.id })]
       ])
     })
+    head.append(this.deleteFolderButton(group, members.length))
     box.append(head)
     const shown = group.collapsed ? members.filter((m) => m.id === s.activeEntryId) : members
     if (shown.length) {
@@ -242,6 +244,36 @@ class GroveSidebar extends HTMLElement {
       box.append(children)
     }
     return box
+  }
+
+  // Deletes the folder with its tabs. The first click only arms it (the
+  // button turns red), so a stray click can't close a whole folder.
+  private deleteFolderButton(group: Group, count: number): HTMLElement {
+    const button = el('button', 'close folder-delete')
+    const idle = `Delete folder and ${tabCount(count)}`
+    button.title = idle
+    button.append(svg(icons.trash))
+    let disarm: ReturnType<typeof setTimeout> | undefined
+    const reset = (): void => {
+      clearTimeout(disarm)
+      disarm = undefined
+      button.classList.remove('armed')
+      button.title = idle
+    }
+    button.addEventListener('mousedown', (ev) => ev.stopPropagation())
+    button.addEventListener('pointerdown', (ev) => ev.stopPropagation())
+    button.addEventListener('mouseleave', reset)
+    button.addEventListener('click', (ev) => {
+      ev.stopPropagation()
+      if (!count || disarm) {
+        reset()
+        return send({ type: 'deleteFolder', groupId: group.id })
+      }
+      button.classList.add('armed')
+      button.title = 'Click again to delete'
+      disarm = setTimeout(reset, 3000)
+    })
+    return button
   }
 
   private foot(s: WindowState): HTMLElement {
@@ -389,4 +421,8 @@ customElements.define('grove-sidebar', GroveSidebar)
 // Unloading frees a page's memory; selecting the tab reopens it as it was.
 function unloadItem(e: EntryView): MenuItem[] {
   return e.live ? [['Unload tab', () => send({ type: 'unload', entryId: e.id })]] : []
+}
+
+function tabCount(n: number): string {
+  return n === 1 ? '1 tab' : `${n} tabs`
 }

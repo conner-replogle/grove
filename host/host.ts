@@ -460,6 +460,13 @@ export class GroveHost {
         })
       case 'ungroup':
         return this.editWorkspace(b, (ws) => M.ungroup(ws, c.groupId))
+      case 'deleteFolder': {
+        // Closing its last tab removes the folder (normalize drops empty ones).
+        const ws = M.getWorkspace(this.model, b.workspaceId)
+        const ids = M.groupEntryIds(ws, c.groupId)
+        if (!ids.length) return this.editWorkspace(b, (w) => M.ungroup(w, c.groupId))
+        return this.closeEntriesEverywhere(ids)
+      }
       case 'setFolderPinned':
         return this.editWorkspace(b, (ws) => M.setGroupPinned(ws, c.groupId, c.pinned))
       case 'moveEntry':
