@@ -7,7 +7,8 @@
     "tabs",
     "contentSettings",
     "downloads",
-    "downloads.open"
+    "downloads.open",
+    "sessions"
   ],
   "host_permissions": [
     "<all_urls>"

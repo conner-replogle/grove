@@ -30,11 +30,54 @@ const tabInfo = (t) => ({
 const otherWindows = new Set()
 const inOther = (windowId) => otherWindows.has(windowId)
 
+// ---- Unloading ----
+// An unloaded tab is closed, and Chrome keeps it among its recently closed
+// tabs (back/forward list, scroll position, form state), so restoring it
+// brings all that back. Chrome keeps the last 25; older ones come back
+// from their URL alone.
+
+// Sessions of tabs Grove unloaded: session id -> the URL the tab was on.
+const unloaded = new Map()
+// While Grove restores a session, new tabs wait: the restored one is known
+// only once restore() answers, and its onCreated comes first. Restored tab
+// id -> the host's request id.
+let restoring = 0
+let held = []
+const restoredRequests = new Map()
+
+const recentlyClosed = () => chrome.sessions.getRecentlyClosed({ maxResults: chrome.sessions.MAX_SESSION_RESULTS }).catch(() => [])
+const sessionIdOf = (s) => (s.tab ?? s.window)?.sessionId
+
+// A tab nobody asked for that is one of Grove's unloaded tabs: the user
+// reopened a closed tab (Ctrl+Shift+T), and Chrome took Grove's newest
+// unloaded tab for it. That tab goes back to its entry, and the tab the
+// user meant, the newest one they closed themselves, opens too.
+async function restoredSession(tab) {
+  const url = tab.url || tab.pendingUrl
+  const candidates = [...unloaded].filter(([, u]) => u === url)
+  if (!candidates.length) return undefined
+  const alive = new Set((await recentlyClosed()).map(sessionIdOf))
+  const gone = candidates.find(([id]) => !alive.has(id))
+  if (!gone) return undefined
+  unloaded.delete(gone[0])
+  const users = (await recentlyClosed()).find((s) => !unloaded.has(sessionIdOf(s)))
+  if (users) chrome.sessions.restore(sessionIdOf(users)).catch(() => {})
+  return gone[0]
+}
+
+async function emitCreated(tab) {
+  const q = pending.get(tab.windowId)
+  let requestId = restoredRequests.get(tab.id)
+  restoredRequests.delete(tab.id)
+  if (!requestId && q && q.length) requestId = q.shift()
+  const session = requestId || !unloaded.size ? undefined : await restoredSession(tab)
+  emit({ type: 'tabCreated', tab: tabInfo(tab), requestId, restoredSession: session })
+}
+
 chrome.tabs.onCreated.addListener((tab) => {
   if (inOther(tab.windowId)) return
-  const q = pending.get(tab.windowId)
-  const requestId = q && q.length ? q.shift() : undefined
-  emit({ type: 'tabCreated', tab: tabInfo(tab), requestId })
+  if (restoring) held.push(tab)
+  else void emitCreated(tab)
 })
 chrome.tabs.onRemoved.addListener((tabId, info) => {
   if (inOther(info.windowId)) return
@@ -220,6 +263,64 @@ globalThis.grove = {
   },
   async remove(tabIds) {
     await chrome.tabs.remove(tabIds)
+  },
+  // Closes tabs, one at a time so each is its own recently closed entry
+  // (oldest first: Chrome forgets the oldest), and says which session
+  // each became: tab id -> session id.
+  async unload(tabIds) {
+    const sessions = {}
+    for (const id of tabIds) {
+      const tab = await chrome.tabs.get(id).catch(() => undefined)
+      if (!tab) continue
+      const url = tab.url || tab.pendingUrl
+      const before = new Set((await recentlyClosed()).map(sessionIdOf))
+      await chrome.tabs.remove(id).catch(() => {})
+      for (let i = 0; i < 20 && !sessions[id]; i++) {
+        const s = (await recentlyClosed()).find((c) => c.tab && !before.has(c.tab.sessionId) && c.tab.url === url)
+        if (s) sessions[id] = s.tab.sessionId
+        else await new Promise((r) => setTimeout(r, 50))
+      }
+      if (sessions[id]) unloaded.set(sessions[id], url)
+    }
+    // Forget sessions Chrome has dropped.
+    const alive = new Set((await recentlyClosed()).map(sessionIdOf))
+    for (const id of unloaded.keys()) if (!alive.has(id)) unloaded.delete(id)
+    return sessions
+  },
+  // Reopens an unloaded tab in a window, active. Null if Chrome no longer
+  // has its session.
+  async restore({ sessionId, windowId, requestId }) {
+    unloaded.delete(sessionId)
+    restoring++
+    let tab
+    try {
+      tab = (await chrome.sessions.restore(sessionId))?.tab
+      if (tab) restoredRequests.set(tab.id, requestId)
+    } catch {
+      // Gone.
+    } finally {
+      restoring--
+    }
+    if (!restoring) {
+      // As they are now (they may have loaded meanwhile); a tab already
+      // closed again is left out.
+      const waiting = held.splice(0)
+      for (const t of waiting) {
+        const now = await chrome.tabs.get(t.id).catch(() => undefined)
+        if (now) await emitCreated(now)
+        else restoredRequests.delete(t.id)
+      }
+    }
+    if (!tab) return null
+    if (tab.windowId !== windowId) {
+      await chrome.tabs.move(tab.id, { windowId, index: -1 })
+      tab = await chrome.tabs.update(tab.id, { active: true })
+    }
+    return tabInfo(tab)
+  },
+  // Whether the user has typed into the tab's page something it would lose.
+  async edited(tabId) {
+    return (await chrome.tabs.sendMessage(tabId, { groveEdited: true }).catch(() => false)) === true
   },
   async downloads() {
     const list = await chrome.downloads.search({ orderBy: ['-startTime'], limit: 50 })

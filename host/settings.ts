@@ -1,6 +1,6 @@
 // Grove's own settings, kept in <profile>/grove-settings.json.
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { DEFAULT_SETTINGS, type GroveSettings } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, UNLOAD_CHOICES, type GroveSettings } from '../shared/protocol.ts'
 
 export class Settings {
   private readonly path: string
@@ -38,6 +38,7 @@ export class Settings {
 function clean(s: GroveSettings): GroveSettings {
   return {
     syncTabs: s.syncTabs === 'pinned' ? 'pinned' : 'all',
-    resume: s.resume !== false
+    resume: s.resume !== false,
+    unloadAfter: UNLOAD_CHOICES.includes(s.unloadAfter) ? s.unloadAfter : DEFAULT_SETTINGS.unloadAfter
   }
 }

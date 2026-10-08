@@ -3,7 +3,7 @@
 // that joins another device, joining or starting one, turning it off) and
 // general settings. The host keeps them; this only shows and sends.
 import closeSvg from 'lucide-static/icons/x.svg'
-import type { GroveSettings, SyncStatus, WindowState } from '../shared/protocol.ts'
+import { UNLOAD_CHOICES, type GroveSettings, type SyncStatus, type WindowState } from '../shared/protocol.ts'
 import { send, subscribe } from './host-client'
 import { svg } from './svg'
 
@@ -58,6 +58,7 @@ class SettingsView {
   private readonly error = el('div', 'grove-settings-error')
   // General.
   private readonly resume = toggle()
+  private readonly unloadAfter = select(UNLOAD_CHOICES.map((m) => [String(m), m ? duration(m) : 'Never']))
 
   constructor(onClose: () => void) {
     this.onClose = onClose
@@ -163,6 +164,12 @@ class SettingsView {
         'When Grove starts, go to the workspace and tab you last used on another device.',
         this.resume,
         (on) => this.set({ resume: on })
+      ),
+      selectRow(
+        'Unload inactive tabs',
+        "Close the page of a tab you haven't looked at for this long, to free memory. Selecting it opens it again as it was. Tabs playing sound or holding something you typed stay.",
+        this.unloadAfter,
+        (v) => this.set({ unloadAfter: Number(v) })
       )
     )
 
@@ -202,6 +209,7 @@ class SettingsView {
       : ''
     this.syncTabs.checked = s.settings.syncTabs === 'all'
     this.resume.checked = s.settings.resume
+    this.unloadAfter.value = String(s.settings.unloadAfter)
     this.code.textContent = sync.code ? (this.showCode ? sync.code : '•'.repeat(32)) : ''
     this.code.classList.toggle('masked', !this.showCode)
     this.showButton.textContent = this.showCode ? 'Hide' : 'Show'
@@ -272,6 +280,28 @@ function toggleRow(label: string, hint: string, t: HTMLInputElement, change: (on
   r.append(text, t)
   return r
 }
+
+function select(options: [value: string, label: string][]): HTMLSelectElement {
+  const s = el('select', 'grove-select')
+  for (const [value, label] of options) {
+    const o = el('option', '', label)
+    o.value = value
+    s.append(o)
+  }
+  return s
+}
+
+function selectRow(label: string, hint: string, s: HTMLSelectElement, change: (value: string) => void): HTMLElement {
+  const r = el('div', 'grove-settings-row')
+  const text = el('div', 'grove-settings-text')
+  text.append(el('span', 'grove-settings-label', label), el('span', 'grove-settings-hint', hint))
+  s.addEventListener('change', () => change(s.value))
+  r.append(text, s)
+  return r
+}
+
+const duration = (minutes: number): string =>
+  minutes < 60 ? `After ${minutes} minutes` : `After ${plural(minutes / 60, 'hour')}`
 
 function input(placeholder: string): HTMLInputElement {
   const i = document.createElement('input')
