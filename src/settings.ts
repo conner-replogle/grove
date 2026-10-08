@@ -58,6 +58,7 @@ class SettingsView {
   private readonly error = el('div', 'grove-settings-error')
   // General.
   private readonly resume = toggle()
+  private readonly autoOrganize = toggle()
   private readonly unloadAfter = select(UNLOAD_CHOICES.map((m) => [String(m), m ? duration(m) : 'Never']))
 
   constructor(onClose: () => void) {
@@ -170,6 +171,12 @@ class SettingsView {
         "Close the page of a tab you haven't looked at for this long, to free memory. Selecting it opens it again as it was. Tabs playing sound or holding something you typed stay.",
         this.unloadAfter,
         (v) => this.set({ unloadAfter: Number(v) })
+      ),
+      toggleRow(
+        'Organize tabs automatically',
+        "Sort new tabs into folders when you step away, the same as the Organize button, and file a page you open in a new tab once it loads. Uses your sync server, which sees those tabs' titles and addresses.",
+        this.autoOrganize,
+        (on) => this.set({ autoOrganize: on })
       )
     )
 
@@ -209,6 +216,8 @@ class SettingsView {
       : ''
     this.syncTabs.checked = s.settings.syncTabs === 'all'
     this.resume.checked = s.settings.resume
+    this.autoOrganize.checked = s.settings.autoOrganize
+    this.autoOrganize.disabled = !on
     this.unloadAfter.value = String(s.settings.unloadAfter)
     this.code.textContent = sync.code ? (this.showCode ? sync.code : '•'.repeat(32)) : ''
     this.code.classList.toggle('masked', !this.showCode)

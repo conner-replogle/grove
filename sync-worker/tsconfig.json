@@ -10,5 +10,5 @@
     "allowImportingTsExtensions": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src", "../shared/sync-protocol.ts"]
+  "include": ["src", "../shared/sync-protocol.ts", "../shared/organize-protocol.ts"]
 }

@@ -102,6 +102,10 @@ chrome.windows.onCreated.addListener((w) => {
 chrome.windows.onRemoved.addListener((windowId) => {
   if (!otherWindows.delete(windowId)) emit({ type: 'windowRemoved', windowId })
 })
+// The computer going idle (no input for a couple of minutes) or locked:
+// the host organizes tabs then (host/organize.ts).
+chrome.idle.setDetectionInterval(120)
+chrome.idle.onStateChanged.addListener((state) => emit({ type: 'idle', state }))
 // A worker that restarted learns which windows aren't Grove's again.
 chrome.windows.getAll({ windowTypes: ['popup', 'app', 'devtools'] }).then((ws) => ws.forEach((w) => otherWindows.add(w.id)))
 

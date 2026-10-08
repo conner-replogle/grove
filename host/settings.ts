@@ -39,6 +39,7 @@ function clean(s: GroveSettings): GroveSettings {
   return {
     syncTabs: s.syncTabs === 'pinned' ? 'pinned' : 'all',
     resume: s.resume !== false,
-    unloadAfter: UNLOAD_CHOICES.includes(s.unloadAfter) ? s.unloadAfter : DEFAULT_SETTINGS.unloadAfter
+    unloadAfter: UNLOAD_CHOICES.includes(s.unloadAfter) ? s.unloadAfter : DEFAULT_SETTINGS.unloadAfter,
+    autoOrganize: s.autoOrganize !== false
   }
 }

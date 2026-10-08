@@ -104,11 +104,22 @@ class GroveSidebar extends HTMLElement {
     const tabs = ws.entries.filter((e) => !e.pinned)
     scroll.append(...this.items(pinned, s, 'pinned'))
     // Zen's separator, with its Clear button: closes the workspace's tabs,
-    // all but its pins.
+    // all but its pins. Organize (with sync on) sorts loose tabs into folders.
     const sep = el('div', 'pinned-separator')
     sep.dataset.kind = 'tabs-start'
     sep.classList.toggle('empty', !pinned.length && !tabs.length)
     sep.append(el('span', 'line'))
+    if (s.sync.state !== 'off' && tabs.some((e) => !e.groupId)) {
+      const organize = el('button', 'clear organize')
+      organize.title = s.organize.error ? `Organize failed: ${s.organize.error}` : 'Sort loose tabs into folders'
+      organize.classList.toggle('busy', s.organize.busy)
+      organize.classList.toggle('failed', !!s.organize.error)
+      organize.disabled = s.organize.busy
+      organize.append(svg(icons.sparkles), el('span', '', s.organize.busy ? 'Organizing…' : 'Organize'))
+      organize.addEventListener('pointerdown', (ev) => ev.stopPropagation())
+      organize.addEventListener('click', () => send({ type: 'organize' }))
+      sep.append(organize)
+    }
     if (tabs.length) {
       const clear = el('button', 'clear')
       clear.title = 'Close all unpinned tabs'

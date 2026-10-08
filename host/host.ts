@@ -7,6 +7,7 @@
 import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import * as M from './model.ts'
+import { applyOrganize, looseTabs, prepare, requestOrganize, sendableUrl, type OrganizeAuth } from './organize.ts'
 import type { Settings } from './settings.ts'
 import { keptByHost, type SitePermissions } from './site-permissions.ts'
 import type { Store } from './store.ts'
@@ -36,6 +37,8 @@ export type BridgeEvent =
   | { type: 'permissionRequest'; id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }
   | { type: 'download'; download: DownloadView; created?: boolean }
   | { type: 'downloadErased'; id: number }
+  // The user's computer went idle or locked, or is in use again.
+  | { type: 'idle'; state: 'active' | 'idle' | 'locked' }
 
 export interface Bridge {
   call<T = unknown>(fn: string, arg?: unknown): Promise<T>
@@ -57,6 +60,7 @@ export interface SyncControl {
   join(code: string): Promise<void>
   off(): void
   setScope(scope: { unpinnedTabs: boolean }): void
+  organizeAuth(): Promise<OrganizeAuth | undefined>
 }
 
 interface Binding {
@@ -113,6 +117,15 @@ export class GroveHost {
   // When a window last showed each tab (see unloadIdle).
   private readonly shownAt = new Map<number, number>()
   private readonly audible = new Set<number>()
+  // Workspaces Organize is sorting now, and why the last try failed.
+  private readonly organizing = new Set<string>()
+  private organizeError?: string
+  // The URL each entry had when Organize last saw it: on its own, it only
+  // runs once a tab has turned up since. For this launch only.
+  private readonly organized = new Map<string, string>()
+  // Pages the user just opened in a new tab, waiting to load before
+  // Organize files them.
+  private readonly freshTabs = new Set<string>()
 
   // Told of every change the host makes to the model (sync records them).
   onModelChange?: () => void
@@ -209,6 +222,9 @@ export class GroveHost {
       case 'downloadErased':
         this.downloads = this.downloads.filter((d) => d.id !== e.id)
         return this.queuePush()
+      case 'idle':
+        if (e.state !== 'active' && this.autoOrganize) void this.organizeAll()
+        return
     }
   }
 
@@ -304,6 +320,7 @@ export class GroveHost {
     // A tab the user or a page opened: a new entry in that window's workspace,
     // next to the tab that opened it.
     const entry = this.adoptTab(tab)
+    if (tab.openerTabId === undefined && this.autoOrganize) this.freshTabs.add(entry.id)
     const b = this.bindWindow(tab.windowId)
     if (tab.active) this.setActive(tab.windowId, b, entry.id)
     if (tab.active && isNewTabPage(tab.url)) this.ui.focusUrlBar(tab.windowId)
@@ -335,7 +352,10 @@ export class GroveHost {
     this.stopLoading(tabId)
     this.dropPermissions(tabId)
     const entryId = this.entryOf.get(tabId)
-    if (entryId) this.unmap(entryId)
+    if (entryId) {
+      this.unmap(entryId)
+      this.freshTabs.delete(entryId)
+    }
     if (this.closingByHost.delete(tabId) || !entryId) return this.queuePush()
     // Closing a window freezes its tabs; closing a tab closes its entry.
     if (!windowClosing) {
@@ -361,6 +381,14 @@ export class GroveHost {
         favicon: tab.favIconUrl || e.favicon
       }))
     )
+    // A page opened in a new tab has loaded: give its title a moment to
+    // settle, then file it.
+    if (tab.status === 'complete' && sendableUrl(tab.url) && this.freshTabs.delete(entryId)) {
+      setTimeout(() => {
+        const ws = M.workspaceOfEntry(this.model, entryId)
+        if (ws) void this.organize(ws.id, { entryId })
+      }, 1500)
+    }
   }
 
   private startLoading(tabId: number): void {
@@ -414,6 +442,8 @@ export class GroveHost {
         const ws = M.getWorkspace(this.model, b.workspaceId)
         return this.closeEntriesEverywhere(ws.entries.filter((e) => !e.pinned).map((e) => e.id))
       }
+      case 'organize':
+        return this.organize(b.workspaceId, 'button')
       case 'newTab':
         return this.newTab(windowId)
       case 'setPinned':
@@ -729,6 +759,52 @@ export class GroveHost {
     await this.unload(go)
   }
 
+  private get autoOrganize(): boolean {
+    return this.settings?.get().autoOrganize ?? DEFAULT_SETTINGS.autoOrganize
+  }
+
+  // Sorts a workspace's loose tabs into folders through the sync server
+  // (host/organize.ts): all of them for the button; while the user is away
+  // ('idle'), all but the tabs windows show, and only once a tab has turned
+  // up since last time, so a tab the user took out of a folder stays out;
+  // or just a page the user opened in a new tab, which can only join a
+  // folder that's there (one tab makes no new folder).
+  private async organize(workspaceId: string, mode: 'button' | 'idle' | { entryId: string }): Promise<void> {
+    const ws = this.model.workspaces.find((w) => w.id === workspaceId)
+    if (!ws || this.organizing.has(workspaceId)) return
+    const shown = new Set([...this.windows.values()].map((b) => b.activeEntryId))
+    const tabs = looseTabs(ws).filter((e) =>
+      mode === 'idle' ? !shown.has(e.id) : mode === 'button' || e.id === mode.entryId
+    )
+    const hasFolders = ws.groups.some((g) => !g.pinned)
+    if (!tabs.length || (!hasFolders && tabs.length < (mode === 'button' ? 2 : 3))) return
+    if (mode === 'idle' && tabs.every((e) => this.organized.get(e.id) === e.url)) return
+    const auth = await this.sync?.organizeAuth()
+    if (!auth) return
+    this.organizing.add(workspaceId)
+    this.organizeError = undefined
+    this.pushAll()
+    try {
+      const { request, ids } = prepare(ws, tabs)
+      const answer = await requestOrganize(auth, request)
+      for (const e of tabs) this.organized.set(e.id, e.url)
+      this.log(`organize: ${Object.keys(answer.assign).length} into folders, ${answer.create.length} new folder(s)`)
+      if (this.model.workspaces.some((w) => w.id === workspaceId)) {
+        this.update((m) => M.withWorkspace(m, workspaceId, (w) => applyOrganize(w, answer, ids)))
+      }
+    } catch (e) {
+      this.organizeError = e instanceof Error ? e.message : String(e)
+      this.log('organize', e)
+    } finally {
+      this.organizing.delete(workspaceId)
+      this.pushAll()
+    }
+  }
+
+  private async organizeAll(): Promise<void> {
+    for (const ws of this.model.workspaces) await this.organize(ws.id, 'idle')
+  }
+
   // The tabs windows show now count as just seen.
   private noteShown(): void {
     const now = Date.now()
@@ -969,7 +1045,8 @@ export class GroveHost {
       permission: this.permissionIn(windowId, b),
       settings: this.settings?.get() ?? DEFAULT_SETTINGS,
       sync: this.sync?.status() ?? { state: 'off', pending: 0 },
-      downloads: this.downloads
+      downloads: this.downloads,
+      organize: { busy: this.organizing.has(ws.id), error: this.organizeError }
     }
   }
 }

@@ -385,6 +385,11 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 .pinned-separator .clear:hover { opacity: 1; }
 .pinned-separator .clear svg { width: 10px; height: 10px; stroke-width: 2.5; transition: transform 0.15s ease-in-out; }
 .pinned-separator .clear:active:hover svg { transform: translateY(2px); }
+.pinned-separator .organize:active:hover svg { transform: scale(0.85); }
+:host .pinned-separator .organize.busy { opacity: 0.8; visibility: visible; }
+.pinned-separator .organize.busy svg { animation: grove-organize-pulse 1s ease-in-out infinite alternate; }
+.pinned-separator .organize.failed span { color: light-dark(#b42318, #f97066); }
+@keyframes grove-organize-pulse { to { opacity: 0.3; transform: scale(0.8); } }
 
 /* ---- Workspace icons ---- */
 

@@ -21,6 +21,9 @@ export interface Peer {
   authed: boolean
 }
 
+// Organize runs (Workers AI calls) an account may make in an hour.
+export const ORGANIZE_PER_HOUR = 30
+
 async function sha256(s: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
@@ -31,6 +34,24 @@ export class Room {
 
   constructor(store: RoomStore) {
     this.store = store
+  }
+
+  // Whether a token is this account's. An account no device has synced
+  // with yet has no token, so nothing is.
+  async authorize(token: unknown): Promise<boolean> {
+    const known = this.store.get('token')
+    return typeof token === 'string' && !!known && (await sha256(token)) === known
+  }
+
+  // Counts an organize request against the account's hourly allowance;
+  // false once it's used up.
+  takeOrganize(now = Date.now()): boolean {
+    const hour = Math.floor(now / 3_600_000)
+    const used = JSON.parse(this.store.get('organize') ?? '{}') as { hour?: number; n?: number }
+    const n = used.hour === hour ? (used.n ?? 0) : 0
+    if (n >= ORGANIZE_PER_HOUR) return false
+    this.store.put('organize', JSON.stringify({ hour, n: n + 1 }))
+    return true
   }
 
   private head(): number {

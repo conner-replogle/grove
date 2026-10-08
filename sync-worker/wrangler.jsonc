@@ -9,5 +9,7 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncRoom"] }],
   // Only these accounts (ids from `grove sync status`) may use this server.
   "vars": { "ACCOUNTS": "e657ecb0f11ad6778e6b905836b4061a" },
+  // Organize (src/organize.ts) runs Clef-flash and a small LLM here.
+  "ai": { "binding": "AI" },
   "observability": { "enabled": true }
 }

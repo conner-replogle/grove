@@ -4,7 +4,8 @@
 import type { SyncStatus } from '../../shared/protocol.ts'
 import { probe, SyncClient, type SyncConfig, type SyncHost } from './client.ts'
 import { readSyncConfig, removeSyncConfig, statePath, writeSyncConfig } from './config.ts'
-import { newSecret } from './crypto.ts'
+import { deriveKeys, newSecret } from './crypto.ts'
+import type { OrganizeAuth } from '../organize.ts'
 import type { Scope } from './records.ts'
 
 // A sync code: the server and the account's secret, '<server>#<secret>'.
@@ -77,6 +78,13 @@ export class SyncManager {
 
   flush(): void {
     this.client?.flush()
+  }
+
+  // The server and account Organize asks, while sync is on.
+  async organizeAuth(): Promise<OrganizeAuth | undefined> {
+    if (!this.config) return undefined
+    const { account, token } = await deriveKeys(this.config.secret)
+    return { server: this.config.url, account, token }
   }
 
   setScope(scope: Scope): void {

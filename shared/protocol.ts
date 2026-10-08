@@ -66,8 +66,11 @@ export interface GroveSettings {
   resume: boolean
   // Unload a tab no window has shown for this many minutes (0: never).
   unloadAfter: number
+  // Organize loose tabs into folders when the computer goes idle, and a
+  // page opened in a new tab once it loads (needs sync).
+  autoOrganize: boolean
 }
-export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true, unloadAfter: 20 }
+export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true, unloadAfter: 20, autoOrganize: true }
 export const UNLOAD_CHOICES = [0, 5, 10, 20, 30, 60, 120]
 
 export interface SyncStatus {
@@ -123,6 +126,8 @@ export interface WindowState {
   settings: GroveSettings
   sync: SyncStatus
   downloads: DownloadView[]
+  // Organize, for the window's workspace: under way, and the last failure.
+  organize: { busy: boolean; error?: string }
 }
 
 export type HostCommand =
@@ -133,6 +138,8 @@ export type HostCommand =
   | { type: 'unload'; entryId: string }
   // Closes the window's workspace's tabs, all but its pins (Zen's Clear).
   | { type: 'clearTabs' }
+  // Sorts the window's workspace's loose tabs into folders (host/organize.ts).
+  | { type: 'organize' }
   | { type: 'newTab' }
   | { type: 'setPinned'; entryId: string; pinned: boolean }
   | { type: 'setEssential'; entryId: string; essential: boolean }
