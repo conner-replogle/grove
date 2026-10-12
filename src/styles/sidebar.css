@@ -190,6 +190,59 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 .close:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 .close:active { background: color-mix(in srgb, currentColor 20%, transparent); }
 
+/* ---- Split view (zen-split-group.inc.css): a split's tabs side by side
+ * in one capsule. ---- */
+
+.split-group {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  min-height: var(--tab-h);
+  margin: 2px;
+  padding: 0 2px;
+  border-radius: var(--radius-medium);
+  transition: scale 0.1s ease;
+}
+.split-group:hover { background: var(--zen-toolbar-element-bg); }
+.split-group.has-selected {
+  background: var(--tab-background-color-selected);
+  box-shadow: var(--tab-box-shadow-selected);
+}
+.split-group:active { scale: 0.985; }
+.split-group > .tab {
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 4px;
+  border-radius: calc(var(--radius-medium) - 4px);
+  container-type: inline-size;
+}
+.split-group > .tab:hover { background: none; }
+.split-group > .tab:active { scale: none; }
+.split-group > .tab .favicon { margin: 0 6px 0 2px; }
+.split-group > .tab.selected {
+  background: color-mix(in srgb, var(--zen-toolbar-element-bg), transparent 40%);
+  box-shadow: none;
+}
+/* Separators between the tabs, gone once the split is the selected one. */
+.split-group > .tab:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  translate: 0 -50%;
+  width: 1px;
+  height: 16px;
+  background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.2));
+}
+.split-group.has-selected > .tab::after { display: none; }
+/* A split tab shows its close button only when it has room (Zen: 70px). */
+.split-group > .tab .close { display: none; }
+@container (min-width: 70px) {
+  .split-group > .tab:hover .close { display: grid; }
+}
+
 /* ---- Folders (Chrome tab groups) ---- */
 
 .folder-header {

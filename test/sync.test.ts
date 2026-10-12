@@ -73,6 +73,7 @@ describe('records', () => {
     const work = m.workspaces[1]
     m = M.withWorkspace(m, work.id, (w) => M.createGroup(w, [w.entries[1].id], 'Builds')[0])
     m = M.moveTo(m, m.workspaces[0].entries[2].id, work.id, { section: 'essentials' })
+    m = M.withWorkspace(m, m.workspaces[0].id, (w) => M.createSplit(w, [w.entries[1].id, w.entries[0].id], 'vsep')[0])
     const records: Records = new Map()
     const changed = commit(records, m, clock('a'))
     expect(changed.size).toBeGreaterThan(0)
@@ -82,6 +83,7 @@ describe('records', () => {
     expect(look(back)).toEqual(look(m))
     expect(back.lastActiveWorkspaceId).toBe(m.lastActiveWorkspaceId)
     expect(back.workspaces[1].activeEntryId).toBe(m.workspaces[1].activeEntryId)
+    expect(back.workspaces[0].splits).toEqual(m.workspaces[0].splits)
     expect(commit(copy(records), back, clock('b')).size).toBe(0)
   })
 

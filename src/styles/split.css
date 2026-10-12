@@ -1,0 +1,150 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Split view panes (src/split.ts), added to Webium's <content-region>.
+ * Values from Zen's zen-split-view.css and zen-browser-ui.css. */
+
+:host {
+  --split-gap: var(--sep, 8px);
+  /* zen-split-view.css:72 */
+  --split-outline: light-dark(
+    hsl(from var(--zen-primary-color) h s calc(l - 20)),
+    var(--zen-primary-color));
+}
+:host([grove-split]) { overflow: visible; }
+
+cr-tab-webview.grove-pane {
+  visibility: visible !important;
+  position: absolute !important;
+  width: auto !important;
+  height: auto !important;
+  border-radius: var(--card-radius, 8px);
+  corner-shape: round;
+  overflow: hidden;
+  box-shadow: var(--zen-big-shadow);
+  background: light-dark(#fff, rgb(32, 32, 32));
+  transition: inset 0.09s ease-out, opacity 0.2s ease-out;
+}
+:host([grove-split-dragging]) cr-tab-webview.grove-pane { transition: none; }
+cr-tab-webview.grove-pane.grove-pane-active { outline: 2px solid var(--split-outline); }
+
+/* Rearranging: every pane dims, the moving one most (ZenViewSplitter.mjs). */
+:host([grove-split-rearranging]) cr-tab-webview.grove-pane { opacity: 0.85; }
+:host([grove-split-rearranging]) cr-tab-webview.grove-pane.grove-pane-dragged { opacity: 0.2; }
+
+.grove-split-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+.grove-split-overlay > * { pointer-events: auto; }
+
+/* A pane whose page is in another window. */
+.grove-pane-missing {
+  position: absolute;
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  text-align: center;
+  border-radius: var(--card-radius, 8px);
+  background: light-dark(#fff, rgb(32, 32, 32));
+  box-shadow: var(--zen-big-shadow);
+  color: var(--toolbox-textcolor);
+  cursor: pointer;
+}
+.grove-pane-missing .title { font-weight: 600; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grove-pane-missing .note { opacity: 0.6; font-size: 12px; }
+
+/* Resizers sit in the gaps (zen-browser-ui.css:244-286): invisible, with
+ * Zen's small pill on hover. */
+.grove-split-resizer { position: absolute; z-index: 3; }
+.grove-split-resizer.vertical { width: var(--split-gap); cursor: ew-resize; }
+.grove-split-resizer.horizontal { height: var(--split-gap); cursor: ns-resize; }
+.grove-split-resizer::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  border-radius: 2px;
+  background: var(--split-outline);
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.grove-split-resizer.vertical::before { width: 2px; height: 50px; }
+.grove-split-resizer.horizontal::before { height: 2px; width: 50px; }
+.grove-split-resizer:hover::before { opacity: 1; }
+
+/* A pane's header (zen-split-view.css:139-204): a pill hanging from the
+ * top edge, with rearrange and unsplit buttons. Grove can't see the pointer
+ * over a page, so it shows when its own spot is hovered: a sliver at the
+ * top middle of the pane. */
+.grove-pane-header {
+  position: absolute;
+  translate: -50% calc(var(--split-gap) / -2);
+  z-index: 4;
+  display: flex;
+  gap: 0.8rem;
+  min-width: 64px;
+  height: 8px;
+  justify-content: center;
+  align-items: flex-end;
+  padding: 0 0.6rem;
+  border-radius: 0 0 6px 6px;
+  box-sizing: border-box;
+  overflow: hidden;
+  transition: height 0.1s, background-color 0.1s, box-shadow 0.1s;
+}
+.grove-pane-header:hover {
+  height: calc(var(--split-gap) / 2 + 24px);
+  padding: 0.4rem 0.6rem 0.2rem;
+  background: var(--split-outline);
+  box-shadow: 0 0 5px 1px rgba(0, 0, 0, 0.1);
+  transition-delay: 0.1s;
+}
+.grove-pane-header button {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: contrast-color(var(--split-outline));
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.grove-pane-header:hover button { opacity: 0.8; transition-delay: 0.1s; }
+.grove-pane-header button:hover { opacity: 1; }
+.grove-pane-header .rearrange { cursor: move; }
+.grove-pane-header .rearrange svg { width: 14px; height: 14px; }
+.grove-pane-header .unsplit svg { width: 11px; height: 11px; }
+
+/* Over the pages while a pane or a tab is dragged. */
+.grove-split-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+}
+
+/* Where a rearranged pane lands (zen-split-view.css:22-30). */
+.grove-split-dropzone {
+  position: absolute;
+  border-radius: var(--card-radius, 8px);
+  background-color: color-mix(in srgb, var(--zen-colors-primary, gray) 30%, transparent 70%);
+  transition: inset 0.08s;
+}
+
+/* Where a tab dropped from the sidebar goes (zen-split-view.css:206-235,
+ * the fake browser). */
+.grove-split-preview {
+  position: absolute;
+  border: 2px solid var(--zen-primary-color);
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: var(--card-radius, 8px);
+  box-shadow: var(--zen-big-shadow);
+  box-sizing: border-box;
+  transition: inset 0.1s ease-out;
+}

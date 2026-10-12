@@ -43,6 +43,8 @@ let searchingForNewTab = false
 let addressBefore = ''
 // Nothing typed in the new tab's search yet.
 let searchUntouched = false
+// Told how the new tab's search ended: whether it opened a tab.
+let onSearchEnd: ((opened: boolean) => void) | undefined
 
 type SearchboxField = Element & { setInputText?(t: string): void }
 const searchboxField = (): SearchboxField | null =>
@@ -61,8 +63,9 @@ export function isNewTabSearch(): boolean {
   return searchingForNewTab
 }
 
-export function openNewTabSearch(): void {
+export function openNewTabSearch(onEnd?: (opened: boolean) => void): void {
   if (!searchingForNewTab) addressBefore = addressText()
+  onSearchEnd = onEnd
   searchingForNewTab = true
   searchUntouched = true
   setCentered(true)
@@ -77,6 +80,9 @@ function endNewTabSearch(opened = false): void {
   if (!searchingForNewTab) return
   searchingForNewTab = false
   if (!opened) searchboxField()?.setInputText?.(addressBefore)
+  const end = onSearchEnd
+  onSearchEnd = undefined
+  end?.(opened)
 }
 
 export function openUrlBarOnNewTab(): void {
@@ -100,7 +106,7 @@ export function openUrlBarOnNewTab(): void {
     if (searchingForNewTab && searchUntouched && text) setTimeout(() => searchboxField()?.setInputText?.(''), 0)
   })
   onFocusUrlBar(openForNewTab)
-  onOpenNewTabSearch(openNewTabSearch)
+  onOpenNewTabSearch(() => openNewTabSearch())
   openInNewTabWhileSearching()
   enterWaitsForResults()
   document.addEventListener(

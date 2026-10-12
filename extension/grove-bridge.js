@@ -95,6 +95,9 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
 chrome.tabs.onAttached.addListener((tabId, { newWindowId }) => {
   if (!inOther(newWindowId)) emit({ type: 'tabAttached', tabId, windowId: newWindowId })
 })
+chrome.tabs.onMoved.addListener((tabId, { windowId }) => {
+  if (!inOther(windowId)) emit({ type: 'tabMoved', tabId, windowId })
+})
 chrome.windows.onCreated.addListener((w) => {
   if (w.type !== 'normal') otherWindows.add(w.id)
   else emit({ type: 'windowCreated', windowId: w.id })
@@ -268,10 +271,15 @@ globalThis.grove = {
     const tab = await chrome.tabs.update(tabId, { active: true })
     return tabInfo(tab)
   },
-  async move({ tabId, windowId }) {
-    await chrome.tabs.move(tabId, { windowId, index: -1 })
-    const tab = await chrome.tabs.update(tabId, { active: true })
-    return tabInfo(tab)
+  async move({ tabId, windowId, active = true }) {
+    const [moved] = [await chrome.tabs.move(tabId, { windowId, index: -1 })].flat()
+    return tabInfo(active ? await chrome.tabs.update(tabId, { active: true }) : moved)
+  },
+  // Each normal window's tab ids in Chrome's order (split view finds a
+  // pane's page by its place in its window).
+  async order() {
+    const windows = await chrome.windows.getAll({ populate: true, windowTypes: ['normal'] })
+    return Object.fromEntries(windows.map((w) => [w.id, w.tabs.map((t) => t.id)]))
   },
   // A small JPEG of what a window shows now, or null where Chrome won't
   // capture (its own pages).

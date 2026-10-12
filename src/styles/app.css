@@ -230,6 +230,14 @@ webui-browser-bookmark-bar { display: none !important; }
   background: light-dark(#fff, rgb(32, 32, 32)) !important;
 }
 
+/* In split view each pane is its own card (src/split.ts), so the card
+ * around them goes. */
+#main.grove-split {
+  background: transparent !important;
+  box-shadow: none;
+  overflow: visible;
+}
+
 /* ---- Sidebar resize handle (src/resize.ts) ---- */
 
 .grove-resizer {

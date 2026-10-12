@@ -7,6 +7,7 @@
 // Which window shows what, and pages' own state, stay on the device.
 import { COLORS, isWorkspaceColor, type Color, type Entry, type Group, type Model, type Workspace } from '../../shared/types.ts'
 import { normalize } from '../model.ts'
+import { parseSplits } from '../split.ts'
 import type { Stamp } from './hlc.ts'
 import { isStamp } from './hlc.ts'
 import { assignKeys } from './order.ts'
@@ -16,7 +17,7 @@ export type Value = string | number | boolean | null
 
 // Fields by kind (besides `alive`):
 //   meta       lastWorkspace                    (one record, id META)
-//   workspace  name, color, icon, active, order
+//   workspace  name, color, icon, active, splits (JSON), order
 //   entry      parent ('essentials' or a workspace id), pinned, url, title,
 //              favicon, group, lastActive, order
 //   group      parent (a workspace id), title, color, collapsed, pinned
@@ -42,6 +43,13 @@ const isAlive = (r: SyncRecord | undefined): r is SyncRecord => r?.f.alive?.[0] 
 const str = (r: SyncRecord | undefined, field: string): string | undefined => {
   const v = r?.f[field]?.[0]
   return typeof v === 'string' ? v : undefined
+}
+const parseJson = (s: string | undefined): unknown => {
+  try {
+    return s ? JSON.parse(s) : undefined
+  } catch {
+    return undefined
+  }
 }
 // Favicons in data URLs can be big; sync only small ones.
 const syncedFavicon = (f: string | undefined): string | null =>
@@ -138,7 +146,11 @@ function project(model: Model, records: Records, scope: Scope): { wanted: Map<st
   for (const ws of model.workspaces) {
     // The active tab may be one other devices don't get.
     const values: Record<string, Value> = { name: ws.name, color: ws.color, icon: ws.icon ?? null }
-    if (scope.unpinnedTabs) values.active = ws.activeEntryId ?? null
+    // So are split tabs: split view only syncs with every tab.
+    if (scope.unpinnedTabs) {
+      values.active = ws.activeEntryId ?? null
+      values.splits = ws.splits?.length ? JSON.stringify(ws.splits) : null
+    }
     wanted.set(ws.id, { kind: 'workspace', values })
     for (const g of ws.groups) {
       if (!syncs(g.id, g.pinned)) continue
@@ -278,6 +290,8 @@ export function materialize(model: Model, records: Records, scope: Scope = ALL):
     if (icon) ws.icon = icon
     const active = synced && scope.unpinnedTabs ? str(synced, 'active') : local?.activeEntryId
     if (active) ws.activeEntryId = active
+    const splits = synced && scope.unpinnedTabs ? parseSplits(parseJson(str(synced, 'splits'))) : local?.splits
+    if (splits?.length) ws.splits = splits
 
     const syncedGroups = groupRecords
       .filter(([, r]) => str(r, 'parent') === id)

@@ -8,6 +8,7 @@ import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySugges
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import * as M from './model.ts'
+import { leaves } from './split.ts'
 import { applyOrganize, looseTabs, prepare, requestOrganize, sendableUrl, type OrganizeAuth } from './organize.ts'
 import type { Settings } from './settings.ts'
 import { keptByHost, type SitePermissions } from './site-permissions.ts'
@@ -33,6 +34,7 @@ export type BridgeEvent =
   | { type: 'tabUpdated'; tab: BridgeTab }
   | { type: 'tabActivated'; tabId: number; windowId: number }
   | { type: 'tabAttached'; tabId: number; windowId: number }
+  | { type: 'tabMoved'; tabId: number; windowId: number }
   | { type: 'windowCreated'; windowId: number }
   | { type: 'windowRemoved'; windowId: number }
   | { type: 'permissionRequest'; id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }
@@ -134,6 +136,12 @@ export class GroveHost {
   // Pages the user just opened in a new tab, waiting to load before
   // Organize files them.
   private readonly freshTabs = new Set<string>()
+  // Each tab's place among its window's tabs, which is how a window's UI
+  // finds a split's pages (Webium knows its tabs by ids of its own).
+  private readonly tabIndex = new Map<number, number>()
+  private orderQueued?: ReturnType<typeof setTimeout>
+  // A window's next new tab joins this entry in a split (splitNextTab).
+  private splitNext?: { windowId: number; entryId: string; at: number }
 
   // Told of every change the host makes to the model (sync records them).
   onModelChange?: () => void
@@ -180,6 +188,7 @@ export class GroveHost {
       })
       .catch((e: unknown) => this.log('history', e))
     setInterval(() => void this.unloadIdle(), 60_000)
+    this.queueOrder()
     this.pushAll()
     // Windows whose UI said hello before the bridge was up.
     for (const id of this.uiReady) void this.finishStartup(id)
@@ -207,8 +216,10 @@ export class GroveHost {
   onBridgeEvent(e: BridgeEvent): void {
     switch (e.type) {
       case 'tabCreated':
+        this.queueOrder()
         return this.onTabCreated(e.tab, e.requestId, e.restoredSession)
       case 'tabRemoved':
+        this.queueOrder()
         return this.onTabRemoved(e.tabId, e.windowClosing)
       case 'tabUpdated':
         return this.onTabUpdated(e.tab)
@@ -216,7 +227,10 @@ export class GroveHost {
         return this.onTabActivated(e.tabId, e.windowId)
       case 'tabAttached':
         this.tabWindow.set(e.tabId, e.windowId)
+        this.queueOrder()
         return this.queuePush()
+      case 'tabMoved':
+        return this.queueOrder()
       case 'windowCreated':
         this.bindWindow(e.windowId)
         return this.queuePush()
@@ -344,6 +358,12 @@ export class GroveHost {
     if (tab.openerTabId === undefined && this.autoOrganize) this.freshTabs.add(entry.id)
     const b = this.bindWindow(tab.windowId)
     if (tab.active) this.setActive(tab.windowId, b, entry.id)
+    const next = this.splitNext
+    if (next?.windowId === tab.windowId && Date.now() - next.at < 10_000) {
+      this.splitNext = undefined
+      this.editWorkspace(b, (ws) => M.createSplit(ws, [next.entryId, entry.id], 'vsep')[0])
+      void this.showSplits()
+    }
     if (tab.active && isNewTabPage(tab.url)) this.ui.focusUrlBar(tab.windowId)
     this.queuePush()
   }
@@ -378,10 +398,12 @@ export class GroveHost {
       this.freshTabs.delete(entryId)
     }
     if (this.closingByHost.delete(tabId) || !entryId) return this.queuePush()
-    // Closing a window freezes its tabs; closing a tab closes its entry.
+    // Closing a window freezes its tabs; closing a tab closes its entry
+    // (and the window moves on to the tab it was split with, if any).
     if (!windowClosing) {
+      const siblings = this.splitMembers(entryId)
       this.closeEntries([entryId])
-      if (windowId !== undefined) void this.afterLoss(windowId)
+      if (windowId !== undefined) void this.afterLoss(windowId, { prefer: siblings, lost: [entryId] })
     }
     this.queuePush()
   }
@@ -458,7 +480,8 @@ export class GroveHost {
       case 'close':
         return this.closeEntriesEverywhere([c.entryId])
       case 'unload':
-        return this.unloadByUser(c.entryId)
+        // A split unloads whole, as in Zen.
+        return this.unloadByUser(this.splitMembers(c.entryId))
       case 'clearTabs': {
         const ws = M.getWorkspace(this.model, b.workspaceId)
         return this.closeEntriesEverywhere(ws.entries.filter((e) => !e.pinned).map((e) => e.id))
@@ -469,11 +492,14 @@ export class GroveHost {
         return this.newTab(windowId)
       case 'setPinned':
         if (!M.findEntry(this.model, c.entryId)?.workspace) return this.moveEntry(windowId, c.entryId, { section: 'pinned' })
-        return this.editWorkspace(b, (ws) => M.setPinned(ws, c.entryId, c.pinned))
+        // A split's tabs are pinned and unpinned together.
+        return this.editWorkspace(b, (ws) =>
+          M.splitMembers(ws, c.entryId).reduce((w, id) => M.setPinned(w, id, c.pinned), ws)
+        )
       case 'setEssential':
         return this.moveEntry(windowId, c.entryId, { section: c.essential ? 'essentials' : 'tabs' })
       case 'newFolder':
-        return this.editWorkspace(b, (ws) => M.createGroup(ws, [c.entryId])[0])
+        return this.editWorkspace(b, (ws) => M.createGroup(ws, M.splitMembers(ws, c.entryId))[0])
       case 'toggleFolder':
         return this.editWorkspace(b, (ws) => {
           const g = ws.groups.find((x) => x.id === c.groupId)
@@ -491,7 +517,31 @@ export class GroveHost {
       case 'setFolderPinned':
         return this.editWorkspace(b, (ws) => M.setGroupPinned(ws, c.groupId, c.pinned))
       case 'moveEntry':
+        // Dragged out of its split in the sidebar: it leaves the split.
+        this.update((m) => {
+          const ws = M.workspaceOfEntry(m, c.entryId)
+          return ws ? M.withWorkspace(m, ws.id, (w) => M.unsplitEntry(w, c.entryId)) : m
+        })
         return this.moveEntry(windowId, c.entryId, { section: c.section, beforeId: c.beforeId, groupId: c.groupId })
+      case 'split':
+        this.editWorkspace(b, (ws) => M.createSplit(ws, c.entryIds, c.layout)[0])
+        return this.showSplits()
+      case 'splitBeside':
+        this.editWorkspace(b, (ws) => M.splitBeside(ws, c.entryId, c.targetId, c.side))
+        // The dropped tab is the one the user wants to look at.
+        return this.activateIn(windowId, c.entryId)
+      case 'swapPanes':
+        return this.editWorkspace(b, (ws) => M.swapSplitPanes(ws, c.entryId, c.otherId))
+      case 'unsplit':
+        this.editWorkspace(b, (ws) => M.unsplitEntry(ws, c.entryId))
+        return this.activateIn(windowId, c.entryId)
+      case 'splitNextTab':
+        this.splitNext = { windowId, entryId: c.entryId, at: Date.now() }
+        return
+      case 'unsplitAll':
+        return this.editWorkspace(b, (ws) => M.removeSplit(ws, c.splitId))
+      case 'setSplitLayout':
+        return this.editWorkspace(b, (ws) => M.setSplitLayout(ws, c.splitId, c.layout))
       case 'moveToWorkspace':
         this.update((m) => M.sendToWorkspace(m, c.entryId, c.workspaceId))
         return this.settle(c.entryId)
@@ -624,8 +674,77 @@ export class GroveHost {
       if (!entry) return
       if (!(await this.restore(windowId, entryId))) await this.createTab(windowId, entry.url || NEW_TAB_URL, entryId)
     }
+    await this.showSplit(windowId)
     await this.dropPlaceholders(windowId)
     this.pushAll()
+  }
+
+  // A window showing a split has every one of its pages: the others are
+  // moved over from other windows or reopened, in the background, and the
+  // window's own tab stays active.
+  private async showSplit(windowId: number): Promise<void> {
+    const b = this.windows.get(windowId)
+    const active = b?.activeEntryId
+    if (!b || !active) return
+    const others = this.splitMembers(active).filter((id) => id !== active)
+    if (!others.length) return
+    const bridge = this.bridge!
+    let activated = false
+    for (const id of others) {
+      const tabId = this.tabOf.get(id)
+      if (tabId !== undefined) {
+        const from = this.tabWindow.get(tabId)!
+        if (from === windowId) continue
+        const src = this.windows.get(from)
+        if (src?.activeEntryId === id) await this.pause(from, id)
+        else await this.keepWindowOpen(from, [tabId])
+        this.tabWindow.set(tabId, windowId)
+        await bridge.call('move', { tabId, windowId, active: false })
+      } else {
+        const entry = this.entry(id)
+        if (!entry) continue
+        if (await this.restore(windowId, id)) activated = true
+        else await this.createTab(windowId, entry.url || NEW_TAB_URL, id, { active: false })
+      }
+    }
+    // Restoring a page makes it active; the window's own tab comes back.
+    const own = this.tabOf.get(active)
+    if (activated && b.activeEntryId === active && own !== undefined) await bridge.call('activate', own).catch(() => {})
+    this.queueOrder()
+  }
+
+  // After splits changed: every window showing one has all its pages.
+  private async showSplits(): Promise<void> {
+    for (const windowId of this.windows.keys()) await this.showSplit(windowId)
+    this.pushAll()
+  }
+
+  // The entries split with `entryId` (itself included), or just it.
+  private splitMembers(entryId: string): string[] {
+    const ws = M.workspaceOfEntry(this.model, entryId)
+    return ws ? M.splitMembers(ws, entryId) : [entryId]
+  }
+
+  // What a window shows: its entry first, then the entries split with it.
+  private shownBy(b: Binding): string[] {
+    const active = b.activeEntryId
+    return active ? [active, ...this.splitMembers(active).filter((id) => id !== active)] : []
+  }
+
+  // Re-reads every window's tab order (after tabs came, went or moved).
+  private queueOrder(): void {
+    if (this.orderQueued || !this.bridge) return
+    this.orderQueued = setTimeout(() => {
+      this.orderQueued = undefined
+      void this.bridge!
+        .call<Record<string, number[]>>('order')
+        .then((order) => {
+          this.tabIndex.clear()
+          for (const tabs of Object.values(order)) tabs.forEach((t, i) => this.tabIndex.set(t, i))
+          this.queuePush()
+        })
+        .catch(() => {})
+    }, 30)
   }
 
   private async newTab(windowId: number): Promise<void> {
@@ -647,6 +766,7 @@ export class GroveHost {
     if (!entryIds.length) return
     const ids = new Set(entryIds)
     const affected = [...this.windows].filter(([, b]) => b.activeEntryId && ids.has(b.activeEntryId)).map(([id]) => id)
+    const siblings = new Map(affected.map((w) => [w, this.shownBy(this.windows.get(w)!)]))
     const tabs = entryIds.map((id) => this.tabOf.get(id)).filter((t) => t !== undefined)
     this.closeEntries(entryIds)
     const byWindow = new Map<number, number[]>()
@@ -656,7 +776,7 @@ export class GroveHost {
     }
     for (const [windowId, windowTabs] of byWindow) await this.keepWindowOpen(windowId, windowTabs)
     await this.closeTabs(tabs)
-    for (const w of affected) await this.afterLoss(w)
+    for (const w of affected) await this.afterLoss(w, { prefer: siblings.get(w), lost: entryIds })
     this.pushAll()
   }
 
@@ -701,15 +821,20 @@ export class GroveHost {
   // A window lost the entry it showed (closed, or moved to another window):
   // show its most recent entry that is already open here, without pulling
   // pages from other windows.
-  private async afterLoss(windowId: number): Promise<void> {
+  // `prefer`: entries to show first (the ones split with the lost one);
+  // `lost`: the entries that went (default: the one the window showed).
+  // Chrome may already have made another tab active, which the window
+  // shows by now: that one isn't lost.
+  private async afterLoss(windowId: number, opts: { prefer?: string[]; lost?: string[] } = {}): Promise<void> {
     const b = this.windows.get(windowId)
     if (!b) return
+    const lost = opts.lost ?? [b.activeEntryId]
     const ws = M.getWorkspace(this.model, b.workspaceId)
     const here = [...ws.entries, ...this.model.essentials].filter((e) => {
       const t = this.tabOf.get(e.id)
-      return t !== undefined && this.tabWindow.get(t) === windowId && e.id !== b.activeEntryId
+      return t !== undefined && this.tabWindow.get(t) === windowId && !lost.includes(e.id)
     })
-    const next = M.mostRecent(here)
+    const next = here.find((e) => opts.prefer?.includes(e.id)) ?? M.mostRecent(here)
     b.activeEntryId = next?.id
     if (next) {
       await this.bridge?.call('activate', this.tabOf.get(next.id))
@@ -769,22 +894,23 @@ export class GroveHost {
 
   // Unload, from the tab's menu. A window showing it moves on to another
   // tab first.
-  private async unloadByUser(entryId: string): Promise<void> {
-    if (!this.tabOf.has(entryId)) return
+  private async unloadByUser(entryIds: string[]): Promise<void> {
+    if (!entryIds.some((id) => this.tabOf.has(id))) return
     for (const [windowId, b] of this.windows) {
-      if (b.activeEntryId !== entryId) continue
-      await this.afterLoss(windowId)
+      const was = b.activeEntryId
+      if (!was || !entryIds.includes(was)) continue
+      await this.afterLoss(windowId, { lost: entryIds })
       if (b.activeEntryId) continue
       const ws = M.getWorkspace(this.model, b.workspaceId)
-      const next = M.mostRecent(ws.entries, entryId)
-      // The workspace's only tab stays.
+      const next = M.mostRecent(ws.entries.filter((e) => !entryIds.includes(e.id)))
+      // The workspace's only tabs stay.
       if (!next) {
-        b.activeEntryId = entryId
+        b.activeEntryId = was
         return this.pushAll()
       }
       await this.activateIn(windowId, next.id)
     }
-    await this.unload([entryId])
+    await this.unload(entryIds)
   }
 
   // Unloads tabs no window has shown for the minutes in the settings, but
@@ -806,7 +932,7 @@ export class GroveHost {
     }
     const keep = await Promise.all(idle.map((id) => this.bridge!.call<boolean>('edited', this.tabOf.get(id)).catch(() => true)))
     // Shown again while that was asked.
-    const shown = new Set([...this.windows.values()].map((b) => b.activeEntryId))
+    const shown = new Set([...this.windows.values()].flatMap((b) => this.shownBy(b)))
     const go = idle.filter((id, i) => !keep[i] && !shown.has(id) && this.tabOf.has(id))
     if (!go.length) return
     this.log(`unloading ${go.length} idle tab(s)`)
@@ -826,7 +952,7 @@ export class GroveHost {
   private async organize(workspaceId: string, mode: 'button' | 'idle' | { entryId: string }): Promise<void> {
     const ws = this.model.workspaces.find((w) => w.id === workspaceId)
     if (!ws || this.organizing.has(workspaceId)) return
-    const shown = new Set([...this.windows.values()].map((b) => b.activeEntryId))
+    const shown = new Set([...this.windows.values()].flatMap((b) => this.shownBy(b)))
     const tabs = looseTabs(ws).filter((e) =>
       mode === 'idle' ? !shown.has(e.id) : mode === 'button' || e.id === mode.entryId
     )
@@ -863,8 +989,10 @@ export class GroveHost {
   private noteShown(): void {
     const now = Date.now()
     for (const b of this.windows.values()) {
-      const t = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
-      if (t !== undefined) this.shownAt.set(t, now)
+      for (const id of this.shownBy(b)) {
+        const t = this.tabOf.get(id)
+        if (t !== undefined) this.shownAt.set(t, now)
+      }
     }
   }
 
@@ -1059,15 +1187,32 @@ export class GroveHost {
     return { entryId, title: this.entry(entryId)?.title ?? '', snapshot: this.snapshots.get(entryId) }
   }
 
+  private splitIn(windowId: number, b: Binding, ws: Workspace): WindowState['split'] {
+    const split = b.activeEntryId ? M.splitOf(ws, b.activeEntryId) : undefined
+    if (!split) return undefined
+    const tabIndex: Record<string, number | null> = {}
+    for (const id of leaves(split.layout)) {
+      const t = this.tabOf.get(id)
+      const here = t !== undefined && this.tabWindow.get(t) === windowId
+      tabIndex[id] = here ? (this.tabIndex.get(t) ?? null) : null
+    }
+    return { id: split.id, layout: split.layout, tabIndex }
+  }
+
+  // The request of the window's page, or else of a page split with it.
   private permissionIn(windowId: number, b: Binding): WindowState['permission'] {
-    const tabId = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
-    if (tabId === undefined || this.tabWindow.get(tabId) !== windowId) return undefined
-    const p = this.permissions.find((x) => x.tabId === tabId)
-    return p && { id: p.id, origin: p.origin, topOrigin: p.topOrigin, kinds: p.kinds }
+    for (const id of this.shownBy(b)) {
+      const tabId = this.tabOf.get(id)
+      if (tabId === undefined || this.tabWindow.get(tabId) !== windowId) continue
+      const p = this.permissions.find((x) => x.tabId === tabId)
+      if (p) return { id: p.id, origin: p.origin, topOrigin: p.topOrigin, kinds: p.kinds }
+    }
+    return undefined
   }
 
   private view(windowId: number, b: Binding): WindowState {
     const ws = M.getWorkspace(this.model, b.workspaceId)
+    const splitOf = new Map((ws.splits ?? []).flatMap((s) => leaves(s.layout).map((id) => [id, s.id] as const)))
     const entryView = (e: Entry): EntryView => {
       const t = this.tabOf.get(e.id)
       return {
@@ -1077,6 +1222,7 @@ export class GroveHost {
         favicon: e.favicon,
         pinned: e.pinned,
         groupId: e.groupId,
+        splitId: splitOf.get(e.id),
         live: t !== undefined,
         here: t !== undefined && this.tabWindow.get(t) === windowId,
         loading: t !== undefined && this.loading.has(t)
@@ -1095,6 +1241,7 @@ export class GroveHost {
       },
       essentials: this.model.essentials.map(entryView),
       activeEntryId: b.activeEntryId,
+      split: this.splitIn(windowId, b, ws),
       paused: this.pausedIn(windowId, b),
       permission: this.permissionIn(windowId, b),
       settings: this.settings?.get() ?? DEFAULT_SETTINGS,

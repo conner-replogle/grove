@@ -50,6 +50,31 @@ export interface Group {
   pinned?: boolean
 }
 
+// Zen's split view: up to MAX_SPLIT tabs shown side by side. A leaf is
+// one tab's pane; a node lays its children out in a row or a column.
+// `size` is the percent of the parent's width (in a row) or height (in a
+// column) a child takes; siblings' sizes add up to 100. A node always has
+// two or more children, none with its own direction.
+export type SplitNode = SplitLeaf | SplitBranch
+export interface SplitLeaf {
+  entryId: string
+  size: number
+}
+export interface SplitBranch {
+  direction: 'row' | 'column'
+  size: number
+  children: SplitNode[]
+}
+export interface Split {
+  id: string
+  layout: SplitNode
+}
+// Zen's three layouts: side by side, stacked, and a grid of pairs.
+export type SplitLayout = 'vsep' | 'hsep' | 'grid'
+// Where a pane goes next to another: its side of that pane.
+export type SplitSide = 'left' | 'right' | 'top' | 'bottom'
+export const MAX_SPLIT = 4
+
 export interface Workspace {
   id: string
   name: string
@@ -59,6 +84,9 @@ export interface Workspace {
   // Tab order: pinned entries first, then the rest.
   entries: Entry[]
   groups: Group[]
+  // Tabs shown together. A split's tabs sit next to each other in the tab
+  // order, in the same section and folder; Essentials are never split.
+  splits?: Split[]
   activeEntryId?: string
 }
 

@@ -11,8 +11,11 @@
 //   data-section  'pinned' | 'tabs' (tabs, folders and folder headers)
 //   data-group    the folder id (folder headers, and tabs inside a folder)
 //   data-workspace  the workspace id (workspace icons)
+//
+// A tab dragged out over the page splits it (src/split.ts).
 import type { EntryView, HostCommand, WindowState } from '../shared/protocol.ts'
 import { send } from './host-client'
+import { sidebarDrop } from './split'
 
 type Source = { entryId: string } | { groupId: string } | { workspaceId: string }
 type MoveEntry = Extract<HostCommand, { type: 'moveEntry' }>
@@ -35,11 +38,13 @@ export class Dragger {
   private readonly host: DragHost
   private readonly root: ShadowRoot
   private readonly state: () => WindowState | undefined
-  private press_?: { source: Source; x: number; y: number; pointerId: number }
+  private press_?: { source: Source; x: number; y: number; pointerId: number; shown?: string }
   private ghost?: HTMLElement
   private grab = { x: 0, y: 0 }
   private indicator?: HTMLElement
   private target?: Target
+  // A drop on the page: the split it would make.
+  private pageDrop?: HostCommand
   private dragged?: HTMLElement
   private scrollSpeed = 0
   private zone?: HTMLElement
@@ -77,7 +82,8 @@ export class Dragger {
 
   press(e: PointerEvent, source: Source): void {
     if (e.button !== 0 || this.active) return
-    this.press_ = { source, x: e.clientX, y: e.clientY, pointerId: e.pointerId }
+    // What the window showed before the press selected the pressed tab.
+    this.press_ = { source, x: e.clientX, y: e.clientY, pointerId: e.pointerId, shown: this.state()?.activeEntryId }
     this.swallowClick = false
   }
 
@@ -103,6 +109,8 @@ export class Dragger {
     this.ghost!.style.translate = `${e.clientX - this.grab.x}px ${e.clientY - this.grab.y}px`
     this.toggleZone(e.clientY)
     this.target = this.targetAt(e.clientX, e.clientY)
+    const source = p.source
+    this.pageDrop = !this.target && 'entryId' in source ? sidebarDrop.over(source.entryId, e.clientX, e.clientY) : undefined
     this.showIndicator()
     this.autoScroll(e.clientY)
   }
@@ -125,6 +133,13 @@ export class Dragger {
     this.root.append(ghost, this.indicator)
     node.classList.add('dragging')
     this.host.classList.add('drag-active')
+    if ('entryId' in source) {
+      // Dragging a tab isn't choosing it: the window goes back to what it
+      // showed, which is what a drop on the page splits.
+      const shown = this.press_?.shown
+      if (shown && shown !== source.entryId) send({ type: 'activate', entryId: shown })
+      sidebarDrop.begin()
+    }
     // With nothing pinned yet there's no Essentials grid to drop on: add an
     // empty one at the top, which opens when the pointer heads up there.
     const scroll = this.root.querySelector('.scroll')
@@ -145,15 +160,21 @@ export class Dragger {
       return
     }
     if (drop && this.target) this.target = this.targetAt(e.clientX, e.clientY)
+    else if (drop && this.pageDrop && this.press_ && 'entryId' in this.press_.source) {
+      this.pageDrop = sidebarDrop.over(this.press_.source.entryId, e.clientX, e.clientY)
+    }
     this.finish(drop)
   }
 
   private finish(drop: boolean): void {
     const target = this.target
+    const pageDrop = this.pageDrop
     const pointerId = this.press_?.pointerId
     this.press_ = undefined
     this.active = false
     this.target = undefined
+    this.pageDrop = undefined
+    sidebarDrop.end()
     this.scrollSpeed = 0
     this.ghost?.remove()
     this.zone?.remove()
@@ -167,6 +188,7 @@ export class Dragger {
     setTimeout(() => (this.swallowClick = false), 0)
     if (pointerId !== undefined && this.host.hasPointerCapture(pointerId)) this.host.releasePointerCapture(pointerId)
     if (drop && target) send(target.command)
+    else if (drop && pageDrop) send(pageDrop)
     this.host.dragEnded()
   }
 

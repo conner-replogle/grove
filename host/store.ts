@@ -6,6 +6,7 @@ import { rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { COLORS, isWorkspaceColor, type Color, type Entry, type Model, type Workspace } from '../shared/types.ts'
 import { emptyModel, normalize } from './model.ts'
+import { parseSplits } from './split.ts'
 
 const SAVE_DELAY_MS = 500
 
@@ -122,6 +123,7 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
     ...(isString(raw.icon) && raw.icon ? { icon: raw.icon } : {}),
     entries,
     groups,
+    splits: parseSplits(raw.splits),
     activeEntryId: isString(raw.activeEntryId) ? raw.activeEntryId : undefined
   })
 }

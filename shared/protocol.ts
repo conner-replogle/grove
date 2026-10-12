@@ -1,7 +1,7 @@
 // What the Grove host and the UI in each window say to each other.
 // The host pushes a WindowState whenever anything a window shows changes;
 // the UI sends HostCommands and keeps no state of its own.
-import type { Group, Section, WorkspaceColor } from './types.ts'
+import type { Group, Section, SplitLayout, SplitNode, SplitSide, WorkspaceColor } from './types.ts'
 
 export interface EntryView {
   id: string
@@ -11,6 +11,8 @@ export interface EntryView {
   favicon?: string
   pinned: boolean
   groupId?: string
+  // The split view it's in.
+  splitId?: string
   // Open as a Chrome tab somewhere (in this window or another).
   live: boolean
   // Open in this window specifically.
@@ -121,6 +123,9 @@ export interface WindowState {
   // selected, greyed out over a snapshot of how it last looked here.
   paused?: { entryId: string; title: string; snapshot?: string }
   activeEntryId?: string
+  // The split view the active entry is in: its panes, and where each
+  // pane's page is among this window's Chrome tabs (null: not here).
+  split?: { id: string; layout: SplitNode; tabIndex: Record<string, number | null> }
   // A permission the page this window shows is asking for.
   permission?: PermissionRequest
   settings: GroveSettings
@@ -154,6 +159,19 @@ export type HostCommand =
   // `pinned`: the section the folder lands in.
   | { type: 'moveFolder'; groupId: string; beforeId?: string; pinned: boolean }
   | { type: 'moveToWorkspace'; entryId: string; workspaceId: string }
+  // Split view. `split` joins tabs (with the split they're in), or lays
+  // one split's tabs out anew; `splitBeside` puts a tab on one side of
+  // another's pane (a tab dropped on the page); `unsplit` takes one tab
+  // out; `setSplitLayout` takes a resized or rearranged tree.
+  | { type: 'split'; entryIds: string[]; layout?: SplitLayout }
+  | { type: 'splitBeside'; entryId: string; targetId: string; side: SplitSide }
+  | { type: 'swapPanes'; entryId: string; otherId: string }
+  | { type: 'unsplit'; entryId: string }
+  | { type: 'unsplitAll'; splitId: string }
+  // The next tab this window opens (from the new tab's search) is split
+  // with `entryId` (Zen's Add Split View…).
+  | { type: 'splitNextTab'; entryId: string }
+  | { type: 'setSplitLayout'; splitId: string; layout: SplitLayout | SplitNode }
   | { type: 'moveWorkspace'; workspaceId: string; beforeId?: string }
   | { type: 'switchWorkspace'; workspaceId: string }
   | { type: 'newWorkspace'; name?: string; color?: WorkspaceColor; icon?: string }

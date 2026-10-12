@@ -9,7 +9,7 @@
 // tab groups only live inside one window). The workspace icons sit at the
 // bottom.
 import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protocol.ts'
-import { COLORS, type Group } from '../shared/types.ts'
+import { COLORS, MAX_SPLIT, type Group, type SplitLayout } from '../shared/types.ts'
 import settingsSvg from 'lucide-static/icons/settings.svg'
 import { Dragger } from './drag'
 import { downloadsButton, type Seen } from './downloads'
@@ -144,19 +144,53 @@ class GroveSidebar extends HTMLElement {
     scroll.scrollTop = scrollTop
   }
 
-  // One section's rows: its loose tabs, and a box for each folder.
+  // One section's rows: its loose tabs and splits, and a box for each folder.
   private items(entries: EntryView[], s: WindowState, section: 'pinned' | 'tabs'): HTMLElement[] {
     const out: HTMLElement[] = []
     const seen = new Set<string>()
+    const loose: EntryView[] = []
+    const flush = (): void => {
+      out.push(...this.rows(loose, s, section))
+      loose.length = 0
+    }
     for (const e of entries) {
-      if (!e.groupId) out.push(this.tabRow(e, s, section))
+      if (!e.groupId) loose.push(e)
       else if (!seen.has(e.groupId)) {
+        flush()
         seen.add(e.groupId)
         const group = s.workspace.groups.find((g) => g.id === e.groupId)
         if (group) out.push(this.folder(group, entries.filter((x) => x.groupId === e.groupId), s, section))
       }
     }
+    flush()
     return out
+  }
+
+  // Tab rows, with a split's tabs (next to each other) in one capsule.
+  private rows(entries: EntryView[], s: WindowState, section: 'pinned' | 'tabs'): HTMLElement[] {
+    const out: HTMLElement[] = []
+    for (let i = 0; i < entries.length; ) {
+      const splitId = entries[i].splitId
+      let j = i + 1
+      while (splitId && j < entries.length && entries[j].splitId === splitId) j++
+      out.push(splitId ? this.splitGroup(splitId, entries.slice(i, j), s, section) : this.tabRow(entries[i], s, section))
+      i = j
+    }
+    return out
+  }
+
+  // Zen's split group (zen-split-group.inc.css): the split's tabs side by
+  // side in one capsule.
+  private splitGroup(splitId: string, members: EntryView[], s: WindowState, section: 'pinned' | 'tabs'): HTMLElement {
+    const selected = members.some((m) => m.id === s.activeEntryId)
+    const box = el('div', `split-group${selected ? ' has-selected' : ''}`)
+    box.dataset.split = splitId
+    for (const m of members) {
+      const row = this.tabRow(m, s, section)
+      row.classList.add('split-tab')
+      box.append(row)
+    }
+    return box
   }
 
   // Called by the dragger when a drag ends.
@@ -199,6 +233,7 @@ class GroveSidebar extends HTMLElement {
     if (e.groupId) row.dataset.group = e.groupId
     const others = s.workspaces.filter((w) => w.id !== s.workspace.id)
     this.wire(row, e, [
+      ...this.splitItems(e, s),
       ['Add to Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: true })],
       [e.pinned ? 'Unpin from workspace' : 'Pin to workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: !e.pinned })],
       ...(e.groupId ? [] : [['Add to new folder', () => send({ type: 'newFolder', entryId: e.id })] as MenuItem]),
@@ -209,6 +244,44 @@ class GroveSidebar extends HTMLElement {
       ['Close', () => send({ type: 'close', entryId: e.id })]
     ])
     return row
+  }
+
+  // Split view, in a tab's menu (Zen's Add Split View…, Join Tabs and
+  // Split Out Tab, and its layouts).
+  private splitItems(e: EntryView, s: WindowState): MenuItem[] {
+    const entries = s.workspace.entries
+    const active = entries.find((x) => x.id === s.activeEntryId)
+    if (e.splitId) {
+      const count = entries.filter((x) => x.splitId === e.splitId).length
+      const layout = (label: string, l: SplitLayout): MenuItem => [label, () => send({ type: 'split', entryIds: [e.id], layout: l })]
+      return [
+        ['Split out tab', () => send({ type: 'unsplit', entryId: e.id })],
+        ['Close split view', () => send({ type: 'unsplitAll', splitId: e.splitId! })],
+        layout('Side by side', 'vsep'),
+        layout('Stacked', 'hsep'),
+        ...(count > 2 ? [layout('Grid', 'grid')] : []),
+        'separator'
+      ]
+    }
+    if (e.id === s.activeEntryId) {
+      return [
+        [
+          'New split view…',
+          () =>
+            openNewTabSearch((opened) => {
+              if (opened) send({ type: 'splitNextTab', entryId: e.id })
+            })
+        ],
+        'separator'
+      ]
+    }
+    if (!active) return []
+    const full = active.splitId && entries.filter((x) => x.splitId === active.splitId).length >= MAX_SPLIT
+    if (full) return []
+    return [
+      [active.splitId ? 'Add to split view' : 'Split with current tab', () => send({ type: 'split', entryIds: [active.id, e.id] })],
+      'separator'
+    ]
   }
 
   private folder(group: Group, members: EntryView[], s: WindowState, section: 'pinned' | 'tabs'): HTMLElement {
@@ -237,10 +310,13 @@ class GroveSidebar extends HTMLElement {
     })
     head.append(this.deleteFolderButton(group, members.length))
     box.append(head)
-    const shown = group.collapsed ? members.filter((m) => m.id === s.activeEntryId) : members
+    const active = members.find((m) => m.id === s.activeEntryId)
+    const shown = group.collapsed
+      ? members.filter((m) => m === active || (active?.splitId && m.splitId === active.splitId))
+      : members
     if (shown.length) {
       const children = el('div', 'folder-tabs')
-      for (const m of shown) children.append(this.tabRow(m, s, section))
+      children.append(...this.rows(shown, s, section))
       box.append(children)
     }
     return box

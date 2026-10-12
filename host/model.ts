@@ -2,7 +2,8 @@
 // model or workspace and never mutates its input, so the service can diff,
 // the store can save snapshots and the tests need no Electron.
 import { randomUUID } from 'node:crypto'
-import { COLORS, type Color, type Entry, type Group, type Model, type MoveTarget, type Section, type Workspace, type WorkspaceColor } from '../shared/types.ts'
+import { COLORS, MAX_SPLIT, type Color, type Entry, type Group, type Model, type MoveTarget, type Section, type Split, type SplitLayout, type SplitNode, type SplitSide, type Workspace, type WorkspaceColor } from '../shared/types.ts'
+import { insertPane, layoutTree, leaves, swapPanes, tidy } from './split.ts'
 
 export const newId = (): string => randomUUID()
 
@@ -309,12 +310,14 @@ export function groupEntryIds(ws: Workspace, groupId: string): string[] {
 // dropped.
 export function normalize(ws: Workspace): Workspace {
   const pinnedGroups = new Map(ws.groups.map((g) => [g.id, !!g.pinned]))
-  const clean = ws.entries.map((e) => {
+  let clean = ws.entries.map((e) => {
     const inPins = e.groupId === undefined ? undefined : pinnedGroups.get(e.groupId)
     const groupId = inPins === undefined ? undefined : e.groupId
     const pinned = inPins ?? e.pinned
     return groupId === e.groupId && pinned === e.pinned ? e : { ...e, groupId, pinned }
   })
+  const splits = cleanSplits(ws, clean)
+  clean = gatherSplits(clean, splits)
 
   const gather = (list: Entry[]): Entry[] => {
     const out: Entry[] = []
@@ -340,8 +343,148 @@ export function normalize(ws: Workspace): Workspace {
     entries.length === ws.entries.length &&
     entries.every((e, i) => e === ws.entries[i]) &&
     groups.length === ws.groups.length &&
-    activeEntryId === ws.activeEntryId
-  return same ? ws : { ...ws, entries, groups, activeEntryId }
+    activeEntryId === ws.activeEntryId &&
+    JSON.stringify(splits) === JSON.stringify(ws.splits ?? [])
+  if (same) return ws
+  const next: Workspace = { ...ws, entries, groups, activeEntryId }
+  if (splits.length) next.splits = splits
+  else delete next.splits
+  return next
+}
+
+// A workspace's splits with their panes' entries still in it, each entry
+// in one split at most, and at least two panes each.
+function cleanSplits(ws: Workspace, entries: Entry[]): Split[] {
+  const present = new Set(entries.map((e) => e.id))
+  const claimed = new Set<string>()
+  const out: Split[] = []
+  for (const split of ws.splits ?? []) {
+    const layout = tidy(split.layout, (id) => present.has(id) && !claimed.has(id))
+    if (!layout) continue
+    const ids = leaves(layout)
+    if (ids.length < 2 || ids.length > MAX_SPLIT) continue
+    ids.forEach((id) => claimed.add(id))
+    out.push({ id: split.id, layout })
+  }
+  return out
+}
+
+// A split's tabs sit together, where its first one in the tab order is,
+// in the order its panes read, and share that one's section and folder.
+function gatherSplits(entries: Entry[], splits: Split[]): Entry[] {
+  if (!splits.length) return entries
+  const splitOf = new Map<string, string[]>()
+  for (const s of splits) for (const id of leaves(s.layout)) splitOf.set(id, leaves(s.layout))
+  const byId = new Map(entries.map((e) => [e.id, e]))
+  const out: Entry[] = []
+  const placed = new Set<string>()
+  for (const e of entries) {
+    if (placed.has(e.id)) continue
+    const members = splitOf.get(e.id)
+    if (!members) {
+      out.push(e)
+      continue
+    }
+    for (const id of members) {
+      const m = byId.get(id)!
+      placed.add(id)
+      const same = m.pinned === e.pinned && m.groupId === e.groupId
+      out.push(same ? m : { ...m, pinned: e.pinned, groupId: e.groupId })
+    }
+  }
+  return out
+}
+
+// ---- Split view ----
+
+export function splitOf(ws: Workspace, entryId: string): Split | undefined {
+  return ws.splits?.find((s) => leaves(s.layout).includes(entryId))
+}
+
+// The entries split with `entryId` (itself included), or just it.
+export function splitMembers(ws: Workspace, entryId: string): string[] {
+  const split = splitOf(ws, entryId)
+  return split ? leaves(split.layout) : [entryId]
+}
+
+// Moves `ids` to just after `refId`, into its section and folder, so a
+// split made of them sits where `refId` is.
+function gatherAt(ws: Workspace, refId: string, ids: string[]): Workspace {
+  const ref = ws.entries.find((e) => e.id === refId)
+  if (!ref) return ws
+  const moving = new Set(ids.filter((id) => id !== refId))
+  const moved = ws.entries.filter((e) => moving.has(e.id)).map((e) => ({ ...e, pinned: ref.pinned, groupId: ref.groupId }))
+  const rest = ws.entries.filter((e) => !moving.has(e.id))
+  rest.splice(rest.findIndex((e) => e.id === refId) + 1, 0, ...moved)
+  return { ...ws, entries: rest }
+}
+
+// Splits tabs (Zen's Join Tabs and its layout shortcuts), where the first
+// of them is. Tabs already in a split bring that split's other tabs along,
+// up to MAX_SPLIT; given just one split's tabs, it takes the new layout.
+export function createSplit(ws: Workspace, entryIds: string[], layout: SplitLayout = 'grid'): [Workspace, string | undefined] {
+  const present = new Set(ws.entries.map((e) => e.id))
+  const asked = [...new Set(entryIds)].filter((id) => present.has(id))
+  if (!asked.length) return [ws, undefined]
+  const joined = (ws.splits ?? []).filter((s) => leaves(s.layout).some((id) => asked.includes(id)))
+  const base = joined.length === 1 ? leaves(joined[0].layout) : []
+  const ids = [...base, ...asked.filter((id) => !base.includes(id))].slice(0, MAX_SPLIT)
+  if (ids.length < 2) return [ws, undefined]
+  const id = joined.length === 1 ? joined[0].id : newId()
+  // First, so its tabs leave any other split (see cleanSplits).
+  const splits = [{ id, layout: layoutTree(ids, layout) }, ...(ws.splits ?? []).filter((s) => s.id !== id)]
+  return [normalize(gatherAt({ ...ws, splits }, ids[0], ids)), id]
+}
+
+// Puts tab `entryId` on one side of the pane of `targetId` (Zen's drop of
+// a tab onto the page): a new split of the two, or one more pane of the
+// split `targetId` is in. Within one split, it moves the pane there.
+export function splitBeside(ws: Workspace, entryId: string, targetId: string, side: SplitSide): Workspace {
+  if (entryId === targetId || !ws.entries.some((e) => e.id === entryId)) return ws
+  if (!ws.entries.some((e) => e.id === targetId)) return ws
+  const target = splitOf(ws, targetId)
+  const own = splitOf(ws, entryId)
+  if (target && own?.id !== target.id && leaves(target.layout).length >= MAX_SPLIT) return ws
+  const layout = insertPane(target?.layout ?? { entryId: targetId, size: 100 }, entryId, side, targetId)
+  const id = target?.id ?? newId()
+  const splits = [{ id, layout }, ...(ws.splits ?? []).filter((s) => s.id !== id)]
+  return normalize(gatherAt({ ...ws, splits }, targetId, [entryId]))
+}
+
+// Trades two panes of one split (Zen's rearrange, dropped on a pane's middle).
+export function swapSplitPanes(ws: Workspace, a: string, b: string): Workspace {
+  const split = splitOf(ws, a)
+  if (!split || splitOf(ws, b)?.id !== split.id) return ws
+  return replaceSplit(ws, { ...split, layout: swapPanes(split.layout, a, b) })
+}
+
+// Takes a tab out of its split (Zen's Split Out Tab); a split left with
+// one tab is no more.
+export function unsplitEntry(ws: Workspace, entryId: string): Workspace {
+  const split = splitOf(ws, entryId)
+  if (!split) return ws
+  const layout = tidy(split.layout, (id) => id !== entryId)
+  return layout ? replaceSplit(ws, { ...split, layout }) : removeSplit(ws, split.id)
+}
+
+export function removeSplit(ws: Workspace, splitId: string): Workspace {
+  return normalize({ ...ws, splits: (ws.splits ?? []).filter((s) => s.id !== splitId) })
+}
+
+// A split's panes laid out anew: one of Zen's layouts, or a tree of the
+// same panes (resized or rearranged in the window).
+export function setSplitLayout(ws: Workspace, splitId: string, layout: SplitLayout | SplitNode): Workspace {
+  const split = ws.splits?.find((s) => s.id === splitId)
+  if (!split) return ws
+  const ids = leaves(split.layout)
+  if (typeof layout === 'string') return replaceSplit(ws, { ...split, layout: layoutTree(ids, layout) })
+  const next = tidy(layout)
+  const same = next && leaves(next).length === ids.length && leaves(next).every((id) => ids.includes(id))
+  return same ? replaceSplit(ws, { ...split, layout: next }) : ws
+}
+
+function replaceSplit(ws: Workspace, split: Split): Workspace {
+  return normalize({ ...ws, splits: (ws.splits ?? []).map((s) => (s.id === split.id ? split : s)) })
 }
 
 function clamp(n: number, lo: number, hi: number): number {
