@@ -4,8 +4,9 @@
 // an entry's page lives in at most one window. Selecting an entry that is
 // open in another window moves the live page here (settled decision 1);
 // workspaces no window shows keep no pages (decision 2).
-import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
+import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import * as M from './model.ts'
 import { applyOrganize, looseTabs, prepare, requestOrganize, sendableUrl, type OrganizeAuth } from './organize.ts'
 import type { Settings } from './settings.ts'
@@ -39,6 +40,8 @@ export type BridgeEvent =
   | { type: 'downloadErased'; id: number }
   // The user's computer went idle or locked, or is in use again.
   | { type: 'idle'; state: 'active' | 'idle' | 'locked' }
+  | { type: 'historyVisited'; item: HistoryItem }
+  | { type: 'historyRemoved'; all: boolean; urls: string[] }
 
 export interface Bridge {
   call<T = unknown>(fn: string, arg?: unknown): Promise<T>
@@ -53,6 +56,8 @@ export interface UiSink {
   openNewTabSearch(windowId: number): void
   // Clicks the window's UI at (x, y) (claimKeyboard).
   click(windowId: number, x: number, y: number): void
+  // History suggestions for what the window's URL bar holds.
+  suggestions(windowId: number, input: string, suggestions: HistorySuggestion[]): void
 }
 
 // Sync as the settings page drives it (host/sync/manager.ts).
@@ -119,6 +124,7 @@ export class GroveHost {
   // When a window last showed each tab (see unloadIdle).
   private readonly shownAt = new Map<number, number>()
   private readonly audible = new Set<number>()
+  readonly history = new HistoryIndex()
   // Workspaces Organize is sorting now, and why the last try failed.
   private readonly organizing = new Set<string>()
   private organizeError?: string
@@ -166,6 +172,13 @@ export class GroveHost {
       this.startup.set(w.id, stray)
     }
     this.downloads = await bridge.call<DownloadView[]>('downloads').catch(() => [])
+    void bridge
+      .call<HistoryItem[]>('history')
+      .then((items) => {
+        this.history.load(items)
+        this.log(`history: ${this.history.size} pages`)
+      })
+      .catch((e: unknown) => this.log('history', e))
     setInterval(() => void this.unloadIdle(), 60_000)
     this.pushAll()
     // Windows whose UI said hello before the bridge was up.
@@ -226,6 +239,12 @@ export class GroveHost {
         return this.queuePush()
       case 'idle':
         if (e.state !== 'active' && this.autoOrganize) void this.organizeAll()
+        return
+      case 'historyVisited':
+        return this.history.visit(e.item)
+      case 'historyRemoved':
+        if (e.all) this.history.clear()
+        else this.history.remove(e.urls)
         return
     }
   }
@@ -512,7 +531,31 @@ export class GroveHost {
         return void (await this.bridge?.call('clearDownloads').catch(() => {}))
       case 'claimKeyboard':
         return this.ui.click(windowId, c.x, c.y)
+      case 'suggest':
+        return this.ui.suggestions(windowId, c.input, this.history.suggest(c.input))
+      case 'open':
+        return this.open(windowId, c.url, c.newTab)
+      case 'forgetUrl':
+        this.history.remove([c.url])
+        return void (await this.bridge?.call('forgetUrl', c.url).catch(() => {}))
     }
+  }
+
+  // Opens a URL bar suggestion of Grove's own: in the window's tab, or in a
+  // new tab next to the others, as New Tab's search does.
+  private async open(windowId: number, url: string, newTab: boolean): Promise<void> {
+    const b = this.bindWindow(windowId)
+    const tabId = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+    if (!newTab && tabId !== undefined && this.tabWindow.get(tabId) === windowId) {
+      await this.bridge!.call('navigate', { tabId, url })
+      return
+    }
+    let entry!: Entry
+    this.update((m) => M.withWorkspace(m, b.workspaceId, (ws) => ([ws, entry] = M.addEntry(ws, { url, title: url }))[0]))
+    this.setActive(windowId, b, entry.id)
+    await this.createTab(windowId, url, entry.id)
+    await this.dropPlaceholders(windowId)
+    this.pushAll()
   }
 
   private editWorkspace(b: Binding, fn: (ws: Workspace) => Workspace): void {

@@ -191,6 +191,12 @@ const host = new GroveHost(
       if (!sessionId) return
       cdp.send('Runtime.evaluate', { expression: `window.${UI_RECEIVER}?.openNewTabSearch()` }, sessionId).catch(() => {})
     },
+    suggestions(windowId, input, list) {
+      const sessionId = sessionOfWindow(windowId)
+      if (!sessionId) return
+      const expression = `window.${UI_RECEIVER}?.suggestions(${JSON.stringify(input)}, ${JSON.stringify(list)})`
+      cdp.send('Runtime.evaluate', { expression }, sessionId).catch(() => {})
+    },
     async click(windowId, x, y) {
       const sessionId = sessionOfWindow(windowId)
       if (!sessionId) return

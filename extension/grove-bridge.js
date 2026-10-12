@@ -220,6 +220,20 @@ chrome.downloads.onErased.addListener((id) => {
   emit({ type: 'downloadErased', id })
 })
 
+// ---- History, for Grove's URL bar suggestions (host/history-index.ts) ----
+
+const historyItem = (h) => ({
+  url: h.url,
+  title: h.title || '',
+  visitCount: h.visitCount || 0,
+  typedCount: h.typedCount || 0,
+  lastVisitTime: h.lastVisitTime || 0
+})
+chrome.history.onVisited.addListener((h) => emit({ type: 'historyVisited', item: historyItem(h) }))
+chrome.history.onVisitRemoved.addListener(({ allHistory, urls }) =>
+  emit({ type: 'historyRemoved', all: allHistory, urls: urls || [] })
+)
+
 globalThis.grove = {
   // Called once the host has installed groveEmit.
   ready() {
@@ -238,6 +252,17 @@ globalThis.grove = {
     }
     const tab = await chrome.tabs.create({ windowId, url, active })
     return tabInfo(tab)
+  },
+  // Every page in history, for the host's index.
+  async history() {
+    const items = await chrome.history.search({ text: '', startTime: 0, maxResults: 100000 })
+    return items.map(historyItem)
+  },
+  async forgetUrl(url) {
+    await chrome.history.deleteUrl({ url })
+  },
+  async navigate({ tabId, url }) {
+    return tabInfo(await chrome.tabs.update(tabId, { url, active: true }))
   },
   async activate(tabId) {
     const tab = await chrome.tabs.update(tabId, { active: true })

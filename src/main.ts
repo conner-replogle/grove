@@ -14,6 +14,7 @@ import { showPausedPages } from './paused'
 import { showPermissionPrompts } from './permission-prompt'
 import { sidebarResizer } from './resize'
 import { showSettings } from './settings'
+import { suggestFromHistory } from './suggestions'
 import { openUrlBarOnNewTab, releasePageFocus, watchUrlBarPlace } from './urlbar'
 import './sidebar'
 
@@ -32,6 +33,7 @@ if (!window.__grove) {
   showDomainOnly()
   closeUrlBarAfterUse()
   openUrlBarOnNewTab()
+  suggestFromHistory()
 
   // Grove's sidebar takes the tab strip's place. Webium's strip stays in
   // the page (hidden) because the app listens to its tab events.

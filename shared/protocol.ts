@@ -173,6 +173,22 @@ export type HostCommand =
   // keyboard focus from the page to the window's UI. Focusing the field
   // from script doesn't.
   | { type: 'claimKeyboard'; x: number; y: number }
+  // The URL bar's text changed: the host answers with history suggestions
+  // (UiSink.suggestions).
+  | { type: 'suggest'; input: string }
+  // Opens one of those suggestions, in this tab or a new one.
+  | { type: 'open'; url: string; newTab: boolean }
+  // Takes a suggestion's page out of history (its remove button).
+  | { type: 'forgetUrl'; url: string }
+
+// A history suggestion for the URL bar (host/history-index.ts).
+export interface HistorySuggestion {
+  url: string
+  title: string
+  // What the URL bar shows for it; an autofill's starts with what was typed.
+  text: string
+  autofill: boolean
+}
 
 // The page-side names the launcher installs and calls.
 export const UI_BINDING = 'groveHostCall'

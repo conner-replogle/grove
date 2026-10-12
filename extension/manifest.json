@@ -9,7 +9,8 @@
     "downloads",
     "downloads.open",
     "sessions",
-    "idle"
+    "idle",
+    "history"
   ],
   "host_permissions": [
     "<all_urls>"
