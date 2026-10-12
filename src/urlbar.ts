@@ -11,10 +11,21 @@
 // afterwards doesn't take it back, so typing would go to the page. So for a
 // New Tab page the <embed> isn't focused; the URL bar is, and the page gets
 // the keyboard once the URL bar closes.
-import { addressText } from './address'
-import { onFocusUrlBar, onOpenNewTabSearch } from './host-client'
+//
+// Once open, the URL bar keeps the keyboard until it's done with (Enter,
+// Escape, a suggestion) or the user clicks elsewhere. Webium focuses the
+// active tab's <embed> when a tab activates or its page is swapped, which
+// can happen at any time (another window, sync, Organize); while the bar is
+// open those don't happen, and if the field loses focus some other way it
+// gets it back with what was typed.
+import { addressText, onAddressSet } from './address'
+import { onFocusUrlBar, onOpenNewTabSearch, send } from './host-client'
 
 let holding = false
+// The URL bar is open: its field got focus and the user isn't done with it.
+let open = false
+// What the field held when it last lost focus, to put back.
+let typed: { value: string; start: number; end: number } | undefined
 // Webium's own <embed> focus, which the override below stands in front of.
 let focusEmbed: HTMLElement['focus'] = HTMLEmbedElement.prototype.focus
 let released: ReturnType<typeof setTimeout> | undefined
@@ -30,17 +41,36 @@ function stopRetries(): void {
 // back the page's address it had.
 let searchingForNewTab = false
 let addressBefore = ''
+// Nothing typed in the new tab's search yet.
+let searchUntouched = false
 
 type SearchboxField = Element & { setInputText?(t: string): void }
 const searchboxField = (): SearchboxField | null =>
   document.querySelector('webui-browser-app')?.shadowRoot?.querySelector('#address') ?? null
 
+// Webium's searchbox (cr-searchbox), as suggestions.ts and Enter use it.
+export interface Searchbox extends HTMLElement {
+  getInputElement(): { inputElement: HTMLInputElement }
+  result: { queryId: number; matches: unknown[] } | null
+  activeQueryId: number
+}
+export const searchbox = (): Searchbox | null => searchboxField() as Searchbox | null
+
+// Whether the URL bar is open as a new tab's search.
+export function isNewTabSearch(): boolean {
+  return searchingForNewTab
+}
+
 export function openNewTabSearch(): void {
   if (!searchingForNewTab) addressBefore = addressText()
   searchingForNewTab = true
+  searchUntouched = true
   setCentered(true)
   focusField()
   searchboxField()?.setInputText?.('')
+  // Ctrl+T comes from the keyboard: Chrome's keyboard focus may be on a page.
+  stopRetries()
+  retries = [0, 120, 400].map((delay) => setTimeout(claimKeyboard, delay))
 }
 
 function endNewTabSearch(opened = false): void {
@@ -55,7 +85,7 @@ export function openUrlBarOnNewTab(): void {
   // blank tab) the URL bar gets the keyboard instead.
   focusEmbed = HTMLEmbedElement.prototype.focus
   HTMLEmbedElement.prototype.focus = function (this: HTMLEmbedElement, options?: FocusOptions) {
-    if (holding) return
+    if (holding || open) return
     if (showsNewTabPage(this)) {
       openForNewTab()
       return
@@ -63,22 +93,38 @@ export function openUrlBarOnNewTab(): void {
     focusEmbed.call(this, options)
   }
 
+  // Ctrl+T: the host switches back to the page the window showed after the
+  // search opens, and Chrome then puts that page's address in the field.
+  // Until something is typed, the search stays empty.
+  onAddressSet((_, text) => {
+    if (searchingForNewTab && searchUntouched && text) setTimeout(() => searchboxField()?.setInputText?.(''), 0)
+  })
   onFocusUrlBar(openForNewTab)
   onOpenNewTabSearch(openNewTabSearch)
   openInNewTabWhileSearching()
+  enterWaitsForResults()
   document.addEventListener(
     'keydown',
     (e) => {
-      if (inSearchbox(e)) stopRetries()
+      if (!inSearchbox(e)) return
+      stopRetries()
+      searchUntouched = false
     },
     true
   )
 
   // A click anywhere but the URL bar closes it: the page gets the keyboard.
+  // (A click on the page itself never reaches this document: see
+  // watchUrlBarPlace.)
   document.addEventListener(
     'pointerdown',
     (e) => {
-      if (holding && !inSearchbox(e)) setTimeout(releasePageFocus, 0)
+      // A suggestion picked is the URL bar done with too (closeUrlBarAfterUse
+      // closes it), so the field isn't focused again as the page loads.
+      if (e.composedPath().some((n) => n instanceof Element && n.tagName === 'CR-SEARCHBOX-MATCH')) open = false
+      if (inSearchbox(e)) return
+      open = false
+      if (holding) setTimeout(releasePageFocus, 0)
     },
     true
   )
@@ -91,7 +137,22 @@ function openForNewTab(): void {
   // can take focus back; focus the field again then, until the user starts
   // typing or the bar closes.
   stopRetries()
-  retries = [0, 120, 400].map((delay) => setTimeout(focusField, delay))
+  retries = [0, 120, 400].map((delay) =>
+    setTimeout(() => {
+      focusField()
+      claimKeyboard()
+    }, delay)
+  )
+}
+
+// Focusing the field doesn't move Chrome's keyboard focus off a page; a
+// click does. Asks the host to click the (empty) field, at its far end.
+function claimKeyboard(): void {
+  const input = fieldInput()
+  if (!input || input.value) return
+  const r = input.getBoundingClientRect()
+  if (!r.width || !r.height) return
+  send({ type: 'claimKeyboard', x: Math.round(r.left + r.width * 0.9), y: Math.round(r.top + r.height / 2) })
 }
 
 // Whether an <embed> shows a New Tab page: its cr-tab-webview's tab, looked
@@ -112,6 +173,7 @@ function showsNewTabPage(embed: HTMLEmbedElement): boolean {
 // Only these end the hold: the field also loses focus for a moment while
 // Webium switches to the new tab.
 export function releasePageFocus(): void {
+  open = false
   stopRetries()
   setCentered(false)
   endNewTabSearch()
@@ -140,6 +202,33 @@ function hold(): void {
 
 function inSearchbox(e: Event): boolean {
   return e.composedPath().some((n) => n instanceof Element && n.tagName === 'WEBUI-BROWSER-SEARCHBOX')
+}
+
+// The field's <input>, inside the searchbox's shadow roots.
+function fieldInput(): HTMLInputElement | null {
+  const field = searchboxField() as (SearchboxField & { getInputElement?(): { inputElement?: HTMLInputElement } }) | null
+  return field?.getInputElement?.()?.inputElement ?? null
+}
+
+// The element that has focus, down through shadow roots.
+function deepActiveElement(): Element | null {
+  let el: Element | null = document.activeElement
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement
+  return el
+}
+
+// Gives the open URL bar its focus back, with what was typed in it and
+// where the caret was (Webium's focus would select it all).
+function refocus(): void {
+  const input = fieldInput()
+  if (!input) return
+  input.focus({ preventScroll: true })
+  if (!typed) return
+  if (input.value !== typed.value) {
+    input.value = typed.value
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }))
+  }
+  input.setSelectionRange(typed.start, typed.end)
 }
 
 function searchboxFocused(): boolean {
@@ -186,23 +275,44 @@ export function watchUrlBarPlace(box: HTMLElement): void {
   if (field) field.placeholderText = 'Search...'
   new ResizeObserver(measure).observe(box)
   box.addEventListener('pointerdown', measure, true)
-  // Once the bar closes (without a new tab's hold), the next open is in
-  // place again.
-  box.addEventListener('focusout', () =>
+  box.addEventListener('focusin', () => {
+    open = true
+  })
+  // The field lost focus. If the user clicked the page, the bar closes (a
+  // click there gives the page's <embed> focus, and nothing else does
+  // while the bar is open); if the window lost focus, it stays as it is;
+  // if anything else took focus, the field gets it back. Once the bar
+  // closes (without a new tab's hold), the next open is in place again.
+  box.addEventListener('focusout', () => {
+    const input = fieldInput()
+    if (open && input) typed = { value: input.value, start: input.selectionStart ?? 0, end: input.selectionEnd ?? 0 }
     setTimeout(() => {
+      const active = deepActiveElement()
+      if (active === fieldInput() || searchboxFocused()) return
+      if (open && active?.tagName !== 'EMBED' && document.hasFocus()) {
+        refocus()
+        return
+      }
+      if (open && active?.tagName === 'EMBED') {
+        open = false
+        holding = false
+        stopRetries()
+        if (!searchingForNewTab) searchboxField()?.setInputText?.(addressText())
+      }
       if (!holding && !searchboxFocused()) {
         setCentered(false)
         endNewTabSearch()
       }
       measure()
     }, 0)
-  )
+  })
   measure()
 }
 
-// While a new tab's search is open, Enter and a click on a suggestion open
-// it in a new foreground tab: Chrome's disposition for Ctrl+Shift, which
-// Webium's searchbox reads off the event and passes to the browser.
+// While a new tab's search is open, a click on a suggestion opens it in a
+// new foreground tab: Chrome's disposition for Ctrl+Shift, which Webium's
+// searchbox reads off the event and passes to the browser. (Enter does the
+// same in enterWaitsForResults.)
 function openInNewTabWhileSearching(): void {
   const redirect = (e: KeyboardEvent | MouseEvent, make: (init: KeyboardEventInit & MouseEventInit) => Event): void => {
     if (!searchingForNewTab || !inSearchbox(e) || (e.ctrlKey && e.shiftKey)) return
@@ -213,15 +323,6 @@ function openInNewTabWhileSearching(): void {
     e.composedPath()[0]?.dispatchEvent(make(init))
   }
   document.addEventListener(
-    'keydown',
-    (e) => {
-      if (e.key === 'Enter' && !e.isComposing) {
-        redirect(e, (init) => new KeyboardEvent('keydown', { ...init, key: 'Enter', code: e.code }))
-      }
-    },
-    true
-  )
-  document.addEventListener(
     'click',
     (e) => {
       if (e.button !== 0) return
@@ -230,4 +331,67 @@ function openInNewTabWhileSearching(): void {
     },
     true
   )
+}
+
+// Enter opens what the URL bar's first row is once the results for the
+// text are in. Webium's searchbox ignores an Enter while it has no results,
+// and one it holds for results on their way is lost if the field closes
+// first (which Grove does right after Enter); and Grove's own suggestions
+// (suggestions.ts) may change the first row. So Grove holds the Enter until
+// the results for the field's text are in, then sends it on, as
+// Ctrl+Shift+Enter (a new foreground tab) for a new tab's search.
+function enterWaitsForResults(): void {
+  const forwarded = new WeakSet<Event>()
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'Enter' || e.isComposing || forwarded.has(e) || !inSearchbox(e)) return
+      const target = e.composedPath()[0]
+      const box = searchbox()
+      if (!(target instanceof HTMLElement) || !box) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const newTab = searchingForNewTab && !(e.ctrlKey && e.shiftKey)
+      void resultsReady(box).then(() => {
+        if (newTab) endNewTabSearch(true)
+        const enter = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: e.code,
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+          ctrlKey: e.ctrlKey || newTab,
+          shiftKey: e.shiftKey || newTab,
+          altKey: e.altKey,
+          metaKey: e.metaKey
+        })
+        forwarded.add(enter)
+        target.dispatchEvent(enter)
+      })
+    },
+    true
+  )
+}
+
+// Something else Enter waits for: Grove's own suggestions (suggestions.ts),
+// one of which may be what Enter should open.
+let alsoReady = (): boolean => true
+export function enterAlsoWaitsFor(ready: () => boolean): void {
+  alsoReady = ready
+}
+
+// Resolves once the searchbox has results for its current query (as its
+// own Enter handling wants them), or after a while regardless.
+function resultsReady(box: Searchbox, timeout = 1500): Promise<void> {
+  const ready = (): boolean =>
+    !box.getInputElement().inputElement.value.trim() ||
+    (!!box.result?.matches.length && (box.activeQueryId === -1 || box.result.queryId === box.activeQueryId) && alsoReady())
+  return new Promise((resolve) => {
+    const start = performance.now()
+    const check = (): void => {
+      if (ready() || performance.now() - start > timeout) resolve()
+      else setTimeout(check, 16)
+    }
+    check()
+  })
 }

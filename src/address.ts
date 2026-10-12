@@ -12,6 +12,12 @@ import { patchMethod } from './patch'
 type SearchboxInput = Element & { shadowRoot: ShadowRoot }
 
 let fullText = ''
+let onSet: ((host: Element, text: string) => void) | undefined
+
+// Called whenever Chrome sets the field's text.
+export function onAddressSet(fn: (host: Element, text: string) => void): void {
+  onSet = fn
+}
 const wired = new WeakSet<Element>()
 
 export function sidebarAddress(url: string): string {
@@ -35,6 +41,7 @@ export function showDomainOnly(): void {
     fullText = text
     wire(this)
     if (!this.matches(':focus-within')) shorten(this)
+    onSet?.(this, text)
     return result
   })
 }

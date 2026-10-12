@@ -51,6 +51,8 @@ export interface UiSink {
   // Opens the window's URL bar as a new tab's search, as Zen does: no tab
   // until a result is picked, which then opens in a new tab.
   openNewTabSearch(windowId: number): void
+  // Clicks the window's UI at (x, y) (claimKeyboard).
+  click(windowId: number, x: number, y: number): void
 }
 
 // Sync as the settings page drives it (host/sync/manager.ts).
@@ -508,6 +510,8 @@ export class GroveHost {
         return void (await this.bridge?.call('downloadAction', { id: c.id, action: c.action }).catch((e: unknown) => this.log('download', e)))
       case 'clearDownloads':
         return void (await this.bridge?.call('clearDownloads').catch(() => {}))
+      case 'claimKeyboard':
+        return this.ui.click(windowId, c.x, c.y)
     }
   }
 

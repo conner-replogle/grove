@@ -168,6 +168,11 @@ export type HostCommand =
   | { type: 'download'; id: number; action: DownloadAction }
   // Takes finished and failed downloads off the list (the files stay).
   | { type: 'clearDownloads' }
+  // The URL bar opened without a click (New Tab from the keyboard, a new
+  // tab's page): the host clicks the field at (x, y), which moves Chrome's
+  // keyboard focus from the page to the window's UI. Focusing the field
+  // from script doesn't.
+  | { type: 'claimKeyboard'; x: number; y: number }
 
 // The page-side names the launcher installs and calls.
 export const UI_BINDING = 'groveHostCall'

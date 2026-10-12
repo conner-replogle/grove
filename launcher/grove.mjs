@@ -23,9 +23,9 @@
 //   GROVE_PROFILE  the profile directory  (default ~/.config/grove-webium)
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GroveHost } from '../host/host.ts'
 import { SitePermissions } from '../host/site-permissions.ts'
@@ -190,6 +190,13 @@ const host = new GroveHost(
       const sessionId = sessionOfWindow(windowId)
       if (!sessionId) return
       cdp.send('Runtime.evaluate', { expression: `window.${UI_RECEIVER}?.openNewTabSearch()` }, sessionId).catch(() => {})
+    },
+    async click(windowId, x, y) {
+      const sessionId = sessionOfWindow(windowId)
+      if (!sessionId) return
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, sessionId).catch(() => {})
+      }
     }
   },
   log,
@@ -408,6 +415,41 @@ await cdp.send('Target.setAutoAttach', {
   filter: [{ type: 'browser_ui' }, { type: 'service_worker' }, { exclude: true }]
 })
 
+// ---- Hot reload ----
+
+// Puts the current UI bundle in every window: the next document gets it,
+// and each window's UI reloads now (its tabs stay as they are).
+async function reloadUi() {
+  bundle = readFileSync(BUNDLE, 'utf8')
+  for (const [sessionId, s] of uiSessions) {
+    await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: s.script }, sessionId)
+    const { identifier } = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: bundle }, sessionId)
+    s.script = identifier
+    await reload(sessionId)
+  }
+  log('reloaded', uiSessions.size, 'window(s)')
+}
+
+// An installed Grove picks up a new UI bundle (install.sh) without a
+// restart. The host, launcher and extension still need one. (install.sh
+// replaces the file, so the directory is watched.)
+if (!dev) {
+  let timer
+  watch(dirname(BUNDLE), (_event, name) => {
+    if (name !== basename(BUNDLE)) return
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      let next
+      try {
+        next = readFileSync(BUNDLE, 'utf8')
+      } catch {
+        return
+      }
+      if (next !== bundle) reloadUi().catch((e) => log('hot reload failed:', e.message))
+    }, 300)
+  })
+}
+
 // ---- Dev mode ----
 
 // Reloads a window's UI and makes sure Grove is in the new document.
@@ -469,14 +511,7 @@ if (dev) {
         setup(build) {
           build.onEnd(async (result) => {
             if (result.errors.length) return
-            bundle = readFileSync(BUNDLE, 'utf8')
-            for (const [sessionId, s] of uiSessions) {
-              await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: s.script }, sessionId)
-              const { identifier } = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: bundle }, sessionId)
-              s.script = identifier
-              await reload(sessionId)
-            }
-            log('reloaded', uiSessions.size, 'window(s)')
+            await reloadUi()
           })
         }
       }
