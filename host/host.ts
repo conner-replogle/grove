@@ -2,9 +2,12 @@
 // kept in step with Chrome's real windows and tabs through the bridge
 // extension. Windows never own tabs; each window shows one workspace, and
 // an entry's page lives in at most one window. Selecting an entry that is
-// open in another window moves the live page here (settled decision 1);
-// workspaces no window shows keep no pages (decision 2).
-import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type WindowState } from '../shared/protocol.ts'
+// open in another window moves the live page here (settled decision 1).
+// Leaving a workspace keeps its pages loaded, as Zen does, so coming back
+// is instant; the idle sweep (unloadIdle) frees pages no window has shown
+// for a while. (Decision 2 had workspaces no window shows keep no pages,
+// which made every return to a workspace reload its tabs from scratch.)
+import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type UpdateStatus, type WindowState } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import * as M from './model.ts'
@@ -42,6 +45,7 @@ export type BridgeEvent =
   | { type: 'downloadErased'; id: number }
   // The user's computer went idle or locked, or is in use again.
   | { type: 'idle'; state: 'active' | 'idle' | 'locked' }
+  | { type: 'tabPainted'; tabId: number }
   | { type: 'historyVisited'; item: HistoryItem }
   | { type: 'historyRemoved'; all: boolean; urls: string[] }
 
@@ -56,10 +60,16 @@ export interface UiSink {
   // Opens the window's URL bar as a new tab's search, as Zen does: no tab
   // until a result is picked, which then opens in a new tab.
   openNewTabSearch(windowId: number): void
-  // Clicks the window's UI at (x, y) (claimKeyboard).
-  click(windowId: number, x: number, y: number): void
   // History suggestions for what the window's URL bar holds.
   suggestions(windowId: number, input: string, suggestions: HistorySuggestion[]): void
+  // A left click at (x, y) in the window's UI, as the user's own would be.
+  click(windowId: number, x: number, y: number): void
+}
+
+// Updates as the windows drive them (host/updates.ts).
+export interface UpdateControl {
+  status(): UpdateStatus
+  install(): Promise<void>
 }
 
 // Sync as the settings page drives it (host/sync/manager.ts).
@@ -142,11 +152,18 @@ export class GroveHost {
   private orderQueued?: ReturnType<typeof setTimeout>
   // A window's next new tab joins this entry in a split (splitNextTab).
   private splitNext?: { windowId: number; entryId: string; at: number }
+  // Tabs whose page has drawn (or finished loading); see EntryView.painted.
+  private readonly painted = new Set<number>()
 
   // Told of every change the host makes to the model (sync records them).
   onModelChange?: () => void
   settings?: Settings
   sync?: SyncControl
+  updates?: UpdateControl
+  // Quits Grove and starts it again (the launcher's).
+  restart?: () => void
+  // An update offer the user put away, by version, until the next launch.
+  private dismissedUpdate?: string
 
   private readonly store: Store
   private readonly ui: UiSink
@@ -172,6 +189,7 @@ export class GroveHost {
       const stray: number[] = []
       for (const tab of w.tabs) {
         this.tabWindow.set(tab.id, w.id)
+        if (tab.status === 'complete') this.painted.add(tab.id)
         // The new-tab page Chrome opens at start-up gives way to the
         // workspace's own tabs, unless the workspace is empty.
         if (isNewTabPage(tab.url) && ws.entries.length) stray.push(tab.id)
@@ -254,6 +272,10 @@ export class GroveHost {
       case 'idle':
         if (e.state !== 'active' && this.autoOrganize) void this.organizeAll()
         return
+      case 'tabPainted':
+        if (!this.tabWindow.has(e.tabId) || this.painted.has(e.tabId)) return
+        this.painted.add(e.tabId)
+        return this.queuePush()
       case 'historyVisited':
         return this.history.visit(e.item)
       case 'historyRemoved':
@@ -343,12 +365,14 @@ export class GroveHost {
     // until the search opens one, so this one goes and the search opens.
     // (A window's only tab stays: something has to show.)
     if (tab.active && isNewTabPage(tab.url) && this.tabsIn(tab.windowId).length > 1) {
-      this.ui.openNewTabSearch(tab.windowId)
-      // Back to the page the window showed, then close the new tab: closing
-      // it while Chrome is still making it crashes Webium.
+      // Back to the page the window showed first, then the search: switching
+      // tabs gives the page the keyboard, which would take it from the
+      // search. Then close the new tab: closing it while Chrome is still
+      // making it crashes Webium.
       const back = this.bindWindow(tab.windowId).activeEntryId
       const backTab = back ? this.tabOf.get(back) : undefined
-      if (backTab !== undefined) void this.bridge!.call('activate', backTab).catch(() => {})
+      const reactivated = backTab !== undefined ? this.bridge!.call('activate', backTab).catch(() => {}) : Promise.resolve()
+      void reactivated.then(() => this.ui.openNewTabSearch(tab.windowId))
       setTimeout(() => void this.closeTabs([tab.id]), 500)
       return
     }
@@ -390,6 +414,7 @@ export class GroveHost {
     this.placeholders.delete(tabId)
     this.shownAt.delete(tabId)
     this.audible.delete(tabId)
+    this.painted.delete(tabId)
     this.stopLoading(tabId)
     this.dropPermissions(tabId)
     const entryId = this.entryOf.get(tabId)
@@ -413,6 +438,8 @@ export class GroveHost {
     else this.audible.delete(tab.id)
     if (tab.status === 'loading') this.startLoading(tab.id)
     else this.stopLoading(tab.id)
+    // Chrome's own pages run no content scripts to say they painted.
+    if (tab.status === 'complete') this.painted.add(tab.id)
     if (tab.url) this.dropPermissions(tab.id, tab.url)
     const entryId = this.entryOf.get(tab.id)
     if (!entryId) return this.queuePush()
@@ -588,6 +615,13 @@ export class GroveHost {
       case 'forgetUrl':
         this.history.remove([c.url])
         return void (await this.bridge?.call('forgetUrl', c.url).catch(() => {}))
+      case 'installUpdate':
+        return this.updates?.install()
+      case 'restartForUpdate':
+        return this.restart?.()
+      case 'dismissUpdate':
+        this.dismissedUpdate = this.updates?.status().version
+        return this.pushAll()
     }
   }
 
@@ -783,14 +817,12 @@ export class GroveHost {
   private async switchWorkspace(windowId: number, workspaceId: string): Promise<void> {
     const b = this.bindWindow(windowId)
     if (b.workspaceId === workspaceId) return
-    const old = b.workspaceId
     const ws = M.getWorkspace(this.model, workspaceId)
     b.workspaceId = workspaceId
     b.activeEntryId = ws.activeEntryId ?? M.mostRecent(ws.entries)?.id
     this.update((m) => ({ ...m, lastActiveWorkspaceId: workspaceId }))
     this.pushAll()
     await this.showActive(windowId)
-    await this.unloadIfHidden(old)
     this.pushAll()
   }
 
@@ -1180,6 +1212,13 @@ export class GroveHost {
     if (b) this.ui.push(windowId, this.view(windowId, b))
   }
 
+  private updateOffer(): UpdateStatus | undefined {
+    const u = this.updates?.status()
+    if (!u || u.state === 'none') return undefined
+    if (u.state === 'available' && u.version === this.dismissedUpdate) return undefined
+    return u
+  }
+
   private pausedIn(windowId: number, b: Binding): WindowState['paused'] {
     const entryId = b.activeEntryId
     const tabId = entryId ? this.tabOf.get(entryId) : undefined
@@ -1225,7 +1264,8 @@ export class GroveHost {
         splitId: splitOf.get(e.id),
         live: t !== undefined,
         here: t !== undefined && this.tabWindow.get(t) === windowId,
-        loading: t !== undefined && this.loading.has(t)
+        loading: t !== undefined && this.loading.has(t),
+        painted: t !== undefined && (this.painted.has(t) || (!this.loading.has(t) && !/^https?:/.test(e.url)))
       }
     }
     return {
@@ -1247,7 +1287,8 @@ export class GroveHost {
       settings: this.settings?.get() ?? DEFAULT_SETTINGS,
       sync: this.sync?.status() ?? { state: 'off', pending: 0 },
       downloads: this.downloads,
-      organize: { busy: this.organizing.has(ws.id), error: this.organizeError }
+      organize: { busy: this.organizing.has(ws.id), error: this.organizeError },
+      update: this.updateOffer()
     }
   }
 }

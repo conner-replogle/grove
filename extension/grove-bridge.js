@@ -237,6 +237,13 @@ chrome.history.onVisitRemoved.addListener(({ allHistory, urls }) =>
   emit({ type: 'historyRemoved', all: allHistory, urls: urls || [] })
 )
 
+// A page's first paint (permissions-relay.js), or its load where nothing
+// painted that the page could see.
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (!message?.grovePainted || !sender.tab || sender.frameId !== 0 || inOther(sender.tab.windowId)) return
+  emit({ type: 'tabPainted', tabId: sender.tab.id })
+})
+
 globalThis.grove = {
   // Called once the host has installed groveEmit.
   ready() {

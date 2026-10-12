@@ -16,6 +16,8 @@ fi
 node build.mjs
 mkdir -p "$dest"
 rsync -a --delete launcher host shared extension dist package.json "$dest/"
+# Marks the copy as installed: it may update itself from GitHub releases.
+echo "checkout $(pwd) $(git rev-parse --short HEAD 2>/dev/null || true)" > "$dest/.installed"
 
 # Keep whatever `grove` was before (the Chromium fork's launcher) once.
 if [ -f "$bin" ] && ! grep -q grove-ui "$bin" && [ ! -e "$bin.before-grove-ui" ]; then

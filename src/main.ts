@@ -10,6 +10,7 @@ import { addStyles, patchMethod } from './patch'
 import { showDomainOnly } from './address'
 import { anchorExtensionsBar } from './extensions-anchor'
 import { showDownloads } from './downloads'
+import { coverUnpaintedPages } from './loading-cover'
 import { showPausedPages } from './paused'
 import { showPermissionPrompts } from './permission-prompt'
 import { sidebarResizer } from './resize'
@@ -41,6 +42,7 @@ if (!window.__grove) {
   keepSidebarMounted()
   const main = (): HTMLElement | null =>
     document.querySelector('webui-browser-app')?.shadowRoot?.querySelector<HTMLElement>('#main') ?? null
+  coverUnpaintedPages(main)
   showPausedPages(main)
   showPermissionPrompts(main)
   showDownloads(main)

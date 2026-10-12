@@ -18,6 +18,9 @@ export interface EntryView {
   // Open in this window specifically.
   here: boolean
   loading: boolean
+  // Its page has drawn something (or finished loading). Until then the
+  // window covers the page's empty, see-through surface.
+  painted: boolean
 }
 
 export interface WorkspaceSummary {
@@ -113,6 +116,21 @@ export interface DownloadView {
 }
 export type DownloadAction = 'open' | 'show' | 'pause' | 'resume' | 'cancel' | 'retry' | 'remove'
 
+// A newer Grove release (host/updates.ts).
+export interface UpdateStatus {
+  // 'available': a newer release is out; 'downloading': installing it;
+  // 'ready': installed, runs once Grove restarts; 'error': installing failed.
+  state: 'none' | 'available' | 'downloading' | 'ready' | 'error'
+  current: string
+  version?: string
+  notes?: string
+  url?: string
+  error?: string
+  // This copy was installed (install.sh or an update) and can update itself;
+  // a checkout run with pnpm dev can't.
+  installed: boolean
+}
+
 export interface WindowState {
   windowId: number
   workspaces: WorkspaceSummary[]
@@ -133,6 +151,7 @@ export interface WindowState {
   downloads: DownloadView[]
   // Organize, for the window's workspace: under way, and the last failure.
   organize: { busy: boolean; error?: string }
+  update?: UpdateStatus
 }
 
 export type HostCommand =
@@ -198,6 +217,10 @@ export type HostCommand =
   | { type: 'open'; url: string; newTab: boolean }
   // Takes a suggestion's page out of history (its remove button).
   | { type: 'forgetUrl'; url: string }
+  // Updates: install the release on offer, then restart into it.
+  | { type: 'installUpdate' }
+  | { type: 'restartForUpdate' }
+  | { type: 'dismissUpdate' }
 
 // A history suggestion for the URL bar (host/history-index.ts).
 export interface HistorySuggestion {

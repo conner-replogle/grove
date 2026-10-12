@@ -281,6 +281,7 @@ export function watchUrlBarPlace(box: HTMLElement): void {
   if (field) field.placeholderText = 'Search...'
   new ResizeObserver(measure).observe(box)
   box.addEventListener('pointerdown', measure, true)
+  selectAllOnClick(box)
   box.addEventListener('focusin', () => {
     open = true
   })
@@ -313,6 +314,32 @@ export function watchUrlBarPlace(box: HTMLElement): void {
     }, 0)
   })
   measure()
+}
+
+// A click that opens the URL bar selects its whole address, as in Chrome
+// and Zen, so typing replaces it (a drag still selects just what it
+// covers; a click on the open bar places the caret).
+function selectAllOnClick(box: HTMLElement): void {
+  let opening = false
+  box.addEventListener(
+    'pointerdown',
+    (e) => {
+      opening = e.button === 0 && e.isTrusted && !searchboxFocused()
+    },
+    true
+  )
+  box.addEventListener(
+    'pointerup',
+    () => {
+      if (!opening) return
+      opening = false
+      setTimeout(() => {
+        const input = fieldInput()
+        if (input && input.selectionStart === input.selectionEnd && searchboxFocused()) input.select()
+      }, 0)
+    },
+    true
+  )
 }
 
 // While a new tab's search is open, a click on a suggestion opens it in a

@@ -20,6 +20,21 @@ Chromium 152 or later with Webium works, e.g. ungoogled-chromium, but not the
 Grove Chromium fork, whose own workspace service fights this one) and
 `GROVE_PROFILE` the profile (default `~/.config/grove-webium`).
 
+## Releases and updates
+
+```sh
+pnpm release 0.2.0     # = scripts/release.sh: tests, tag v0.2.0, push, GitHub release
+```
+
+The release carries a prebuilt `grove-ui-<version>.tar.gz`. An installed
+Grove (`./install.sh`) checks GitHub's latest release a minute after launch
+and every six hours, and offers it at the bottom of the sidebar: Update
+downloads and swaps it in (the previous copy stays as
+`~/.local/opt/grove-ui.old`), Restart starts it. The repository is private,
+so the check uses `GROVE_GITHUB_TOKEN`/`GITHUB_TOKEN` or the GitHub CLI's
+token (`gh auth token`). A checkout run with `pnpm dev` only says a release
+is out.
+
 ## Layout
 
 - `launcher/` — starts the browser and injects the UI (`cdp.mjs` is the pipe client)

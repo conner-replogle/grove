@@ -1,6 +1,7 @@
 {
   "name": "grove-ui",
   "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "Grove's browser UI: injected into Chromium's WebUI browser (Webium)",
   "scripts": {
@@ -8,7 +9,8 @@
     "dev": "node launcher/grove.mjs --dev",
     "start": "node build.mjs && node launcher/grove.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "release": "scripts/release.sh"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
