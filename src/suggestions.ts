@@ -44,6 +44,12 @@ export function suggestFromHistory(): void {
   let sources: Source[] = []
   // The last text the host was asked about.
   let asked: string | undefined
+  // Whether each query (by id) may be filled in, as the searchbox decided
+  // when it sent it. Asking the input again later is no good: its
+  // "deleting" mark is cleared as soon as Chrome's result sets the text, so
+  // Grove's suggestions arriving after it would fill in again what a
+  // Backspace just deleted.
+  const fillable = new Map<number, boolean>()
   enterAlsoWaitsFor(() => asked === undefined || latest?.input === asked)
 
   const wire = (): void => {
@@ -65,13 +71,17 @@ export function suggestFromHistory(): void {
       },
       set(value: Result | null) {
         chromeResult = value
-        const [merged, from] = merge(value, latest, el)
+        const [merged, from] = merge(value, latest, value ? fillable.get(value.queryId) : undefined, el)
         sources = from
         set.call(this, merged)
       }
     })
     const own = el.pageHandler.bind(el)
-    el.pageHandler = () => translate(own(), () => sources, forget)
+    el.pageHandler = () =>
+      translate(own(), () => sources, forget, (queryId, preventInline) => {
+        fillable.set(queryId, !preventInline)
+        for (const id of fillable.keys()) if (id < queryId - 20) fillable.delete(id)
+      })
     el.addEventListener('query-autocomplete', (e) => {
       const input = (e as CustomEvent<{ inputValue: string }>).detail?.inputValue ?? ''
       if (input.trim()) {
@@ -109,13 +119,18 @@ export function suggestFromHistory(): void {
   tryWire()
 }
 
-function merge(result: Result | null, latest: { input: string; list: HistorySuggestion[] } | undefined, box: Box): [Result | null, Source[]] {
+function merge(
+  result: Result | null,
+  latest: { input: string; list: HistorySuggestion[] } | undefined,
+  fillable: boolean | undefined,
+  box: Box
+): [Result | null, Source[]] {
   const identity = (r: Result | null): Source[] => (r?.matches ?? []).map((_, i) => ({ chrome: i }))
   if (!result || !latest || latest.input !== result.input || !latest.list.length) return [result, identity(result)]
   const typed = result.input
   const bare = normalize(typed)
   // Backspace, a paste, or a caret moved back: no filling in (Chrome's rule).
-  const mayFill = !/\s$/.test(typed) && !box.getInputElement().preventInlineAutocomplete(typed)
+  const mayFill = !/\s$/.test(typed) && (fillable ?? !box.getInputElement().preventInlineAutocomplete(typed))
   const template = result.matches[0]
   const chrome = result.matches.map((m, i) => ({ m, src: { chrome: i } as Source }))
 
@@ -197,13 +212,26 @@ function toMatch(s: HistorySuggestion, typed: string, bare: string, fill: boolea
 // The searchbox's page handler, with match positions mapped back to
 // Chrome's result; Grove's own matches open (or are forgotten) through the
 // host.
-function translate(handler: Handler, sources: () => Source[], forget: (s: HistorySuggestion) => void): Handler {
+function translate(
+  handler: Handler,
+  sources: () => Source[],
+  forget: (s: HistorySuggestion) => void,
+  queried: (queryId: number, preventInline: boolean) => void
+): Handler {
   const at = (line: unknown): Source | undefined => sources()[line as number]
   return new Proxy(handler, {
     get(target, key) {
       const value = Reflect.get(target, key) as unknown
       if (typeof value !== 'function') return value
       const call = (...a: unknown[]): unknown => (value as (...a: unknown[]) => unknown).apply(target, a)
+      if (key === 'queryAutocomplete') {
+        // (queryId, [tabId,] input, preventInlineAutocomplete, ...): Chromium
+        // 154 added the tab id, so the flag is the first boolean.
+        return (...a: unknown[]) => {
+          queried(a[0] as number, a.find((x) => typeof x === 'boolean') === true)
+          return call(...a)
+        }
+      }
       if (key === 'openAutocompleteMatch') {
         return (line: unknown, url: unknown, showing: unknown, button: unknown, mods: unknown, ...rest: unknown[]) => {
           const src = at(line)
