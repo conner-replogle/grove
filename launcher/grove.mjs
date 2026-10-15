@@ -104,8 +104,10 @@ function prepareBridge() {
 
 // Grove's host restores the workspaces, so Chrome must not also restore its
 // own last session (every restart would duplicate the tabs): drop Chrome's
-// session files, start each session on a fresh window, and don't offer
-// crash restore.
+// session files and don't offer crash restore. Startup is still "continue
+// where you left off" (1), with nothing left to restore: any other setting
+// makes Chrome delete session cookies at launch, signing out of sites that
+// keep their login in one (Microsoft's, for one).
 function prepareProfile() {
   const dir = join(PROFILE, 'Default')
   rmSync(join(dir, 'Sessions'), { recursive: true, force: true })
@@ -125,7 +127,7 @@ function prepareProfile() {
   } catch {
     mkdirSync(dir, { recursive: true })
   }
-  prefs.session = { ...prefs.session, restore_on_startup: 5 }
+  prefs.session = { ...prefs.session, restore_on_startup: 1 }
   prefs.profile = { ...prefs.profile, exit_type: 'Normal', exited_cleanly: true }
   writeFileSync(file, JSON.stringify(prefs))
 }
