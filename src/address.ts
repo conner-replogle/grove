@@ -58,16 +58,16 @@ function shorten(host: SearchboxInput): void {
 function wire(host: SearchboxInput): void {
   if (wired.has(host)) return
   wired.add(host)
-  // Capture, so the full address is back before Chrome's own focus
-  // handling reads the field.
-  host.addEventListener(
-    'focus',
-    () => {
-      const input = field(host)
-      if (input && input.value === sidebarAddress(fullText)) input.value = fullText
-    },
-    true
-  )
+  // Capture, so the full address is back before Chrome's own handling
+  // reads the field: on focus, and on a click's press, which comes first
+  // (Chrome queries suggestions for the field's text on mousedown, and the
+  // result would put the short text back).
+  const lengthen = (): void => {
+    const input = field(host)
+    if (input && input.value === sidebarAddress(fullText)) input.value = fullText
+  }
+  host.addEventListener('focus', lengthen, true)
+  host.addEventListener('pointerdown', lengthen, true)
   host.addEventListener('focusout', () =>
     setTimeout(() => {
       if (!host.matches(':focus-within')) shorten(host)
