@@ -31,13 +31,18 @@ function setHidden(hidden: boolean): void {
   for (const l of listeners) l()
 }
 
-// The footer button: hides the sidebar, or keeps it open again.
+// The button at the start of the sidebar's top row, where Zen has it:
+// hides the sidebar, or keeps it open again.
 export function sidebarToggle(): HTMLElement {
-  const hidden = sidebarHidden()
   const button = document.createElement('button')
-  button.className = 'tbtn sidebar-toggle'
-  button.title = hidden ? 'Keep the sidebar open' : 'Hide the sidebar'
-  button.append(svg(hidden ? panelOpenSvg : panelCloseSvg))
+  button.id = 'groveSidebarToggle'
+  const update = (): void => {
+    const hidden = sidebarHidden()
+    button.title = hidden ? 'Keep the sidebar open' : 'Hide the sidebar'
+    button.replaceChildren(svg(hidden ? panelOpenSvg : panelCloseSvg))
+  }
+  update()
+  addEventListener('grove-sidebar-hidden', update)
   button.addEventListener('click', () => setHidden(!sidebarHidden()))
   return button
 }
