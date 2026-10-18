@@ -8,6 +8,7 @@ import searchboxCss from './styles/searchbox.css'
 import urlbarResultsCss from './zen/urlbar-results.css'
 import { addStyles, patchMethod } from './patch'
 import { showDomainOnly } from './address'
+import { compactMode } from './compact'
 import { anchorExtensionsBar } from './extensions-anchor'
 import { showDownloads } from './downloads'
 import { coverUnpaintedPages } from './loading-cover'
@@ -73,10 +74,11 @@ if (!window.__grove) {
 }
 
 // Puts <grove-sidebar> in the tab strip's slot, and the sidebar's resize
-// handle in the window's grid, as soon as Webium's app has rendered them,
+// handle and compact mode's edge in the window's grid, as soon as Webium's app has rendered them,
 // and again if a re-render ever drops them.
 function keepSidebarMounted(): void {
   let resizer: HTMLElement | undefined
+  let edge: HTMLElement | undefined
   const anchored = new WeakSet<Element>()
   const mount = (): boolean => {
     const app = document.querySelector<HTMLElement>('webui-browser-app')
@@ -87,6 +89,8 @@ function keepSidebarMounted(): void {
     if (!slot.querySelector('grove-sidebar')) slot.append(document.createElement('grove-sidebar'))
     resizer ??= sidebarResizer(app)
     if (resizer.parentNode !== grid) grid.append(resizer)
+    edge ??= compactMode(app)
+    if (edge.parentNode !== grid) grid.append(edge)
     // The extensions button lives inside the URL bar, as in Zen.
     const box = root.querySelector<HTMLElement>('#addressBox')
     if (box && !anchored.has(box)) {

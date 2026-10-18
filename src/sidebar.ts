@@ -11,6 +11,7 @@
 import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protocol.ts'
 import { COLORS, MAX_SPLIT, type Group, type SplitLayout } from '../shared/types.ts'
 import settingsSvg from 'lucide-static/icons/settings.svg'
+import { sidebarToggle } from './compact'
 import { Dragger } from './drag'
 import { downloadsButton, type Seen } from './downloads'
 import { send, subscribe } from './host-client'
@@ -58,6 +59,7 @@ class GroveSidebar extends HTMLElement {
       this.state = s
       this.render()
     })
+    addEventListener('grove-sidebar-hidden', () => this.render())
     document.addEventListener(
       'mousedown',
       (ev) => {
@@ -376,13 +378,14 @@ class GroveSidebar extends HTMLElement {
     add.title = 'New workspace'
     add.append(svg(icons.plus))
     add.addEventListener('click', () => this.openEditor(undefined))
-    // Bottom left, as in Zen: downloads, and Grove's settings.
+    // Bottom left, as in Zen: hide the sidebar, downloads, and Grove's
+    // settings.
     const left = el('div', 'foot-left')
     const settings = el('button', 'tbtn')
     settings.title = 'Settings'
     settings.append(svg(settingsSvg))
     settings.addEventListener('click', openSettings)
-    left.append(downloadsButton(s, this.seenDownloads), settings)
+    left.append(sidebarToggle(), downloadsButton(s, this.seenDownloads), settings)
     foot.append(left, switcher, add)
     return foot
   }

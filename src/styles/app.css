@@ -98,7 +98,8 @@
   animation: grove-urlbar-in 0.12s ease-out;
   transform-origin: top left;
 }
-:host(.grove-urlbar-center) #addressBox:has(#address:focus-within) {
+:host(.grove-urlbar-center) #addressBox:has(#address:focus-within),
+:host(.grove-compact:not(.grove-peek)) #addressBox:has(#address:focus-within) {
   top: 14vh;
   left: 50%;
   translate: -50% 0;
@@ -151,7 +152,8 @@
   --color-searchbox-selection-foreground: var(--grove-url-fg);
   font-weight: 400;
 }
-:host(.grove-urlbar-center) #addressBox:has(#address:focus-within) #address {
+:host(.grove-urlbar-center) #addressBox:has(#address:focus-within) #address,
+:host(.grove-compact:not(.grove-peek)) #addressBox:has(#address:focus-within) #address {
   --cr-searchbox-height: 62px;
   --cr-searchbox-input-height: 62px;
   --cr-searchbox-font-size: 17px;
@@ -267,6 +269,52 @@ webui-browser-bookmark-bar { display: none !important; }
 }
 :host(.grove-resizing) { cursor: col-resize; user-select: none; }
 :host(.grove-resizing) #main { pointer-events: none; }
+
+/* ---- Compact mode (compact.ts): the sidebar hidden, as in Zen ---- */
+
+.grove-compact-edge { display: none; }
+:host(.grove-compact) #rootContainer { grid-template-columns: 0 1fr !important; }
+:host(.grove-compact) #main { margin-left: var(--sep); }
+:host(.grove-compact) .grove-resizer { display: none; }
+/* The strip left of the page card: resting the pointer on it brings the
+ * sidebar back over the page. */
+:host(.grove-compact) .grove-compact-edge {
+  display: block;
+  position: fixed;
+  z-index: 9;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--sep);
+}
+:host(.grove-compact) #topContainer {
+  position: fixed;
+  z-index: 10;
+  top: var(--sep);
+  bottom: var(--sep);
+  left: var(--sep);
+  width: var(--sidebar-w);
+  box-sizing: border-box;
+  padding-top: var(--toolbox-pad);
+  border-radius: var(--card-radius);
+  background: var(--zen-main-browser-background);
+  box-shadow: var(--zen-big-shadow);
+  translate: calc(-100% - 2 * var(--sep));
+  visibility: hidden;
+  transition: translate 0.15s ease, visibility 0.15s ease;
+}
+:host(.grove-compact.grove-peek) #topContainer {
+  translate: 0;
+  visibility: visible;
+}
+/* The URL bar still opens with the sidebar hidden, centered over the
+ * window as for a new tab. (A hidden field couldn't take focus, and the
+ * sidebar's translate would carry the fixed panel off screen.) */
+:host(.grove-compact) #addressBox { visibility: visible; }
+:host(.grove-compact) #topContainer:has(#address:focus-within) {
+  translate: none;
+  transition: none;
+}
 
 /* ---- A page paused here because another window shows it (paused.ts) ---- */
 
