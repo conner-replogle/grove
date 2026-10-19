@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import * as M from '../host/model.ts'
+import { mkdtempSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, vi } from 'vitest'
+import { Settings } from '../host/settings.ts'
 import { applyOrganize, looseTabs, prepare, sendableUrl } from '../host/organize.ts'
-import { CLEF, NAMER, checkRequest, organize, type AiRunner } from '../sync-worker/src/organize.ts'
-import { MemoryStore, ORGANIZE_PER_HOUR, Room } from '../sync-worker/src/room.ts'
+import { CLEF, NAMER, organize, type AiRunner } from '../host/organize-ai.ts'
+import { checkKey, keyPath, WorkersAiKeys, workersAi } from '../host/workers-ai.ts'
 import type { OrganizeRequest } from '../shared/organize-protocol.ts'
 import type { Workspace } from '../shared/types.ts'
 
@@ -32,7 +37,7 @@ const req = (folders: string[], tabs: string[]): OrganizeRequest => ({
   tabs: tabs.map((title, i) => ({ id: `t${i}`, title, url: `${title.toLowerCase()}.test` }))
 })
 
-describe('organize (server)', () => {
+describe('organize (models)', () => {
   it('files sure picks, leaves unsure ones, and names folders for the rest', async () => {
     const { ai, calls } = fakeAi(
       { t0: ['f0', 0.9], t1: ['f0', 0.4], t2: ['new', 0.8], t3: ['new', 0.7], t4: ['new', 0.9] },
@@ -79,28 +84,50 @@ describe('organize (server)', () => {
     await organize(ai, req(['Work'], tabs))
     expect(calls.filter((c) => c.model === CLEF).map((c) => Object.keys(c.input.questions).length)).toEqual([64, 36])
   })
-
-  it('turns away malformed requests', () => {
-    expect(() => checkRequest({ tabs: [] })).toThrow()
-    expect(() => checkRequest({ folders: [], tabs: [{ id: 't0', title: 1, url: '' }] })).toThrow()
-    expect(checkRequest(req(['A'], ['x'])).tabs).toHaveLength(1)
-  })
 })
 
-describe('organize (room)', () => {
-  it("takes only the account's token, and only so often", async () => {
-    const store = new MemoryStore()
-    const room = new Room(store)
-    expect(await room.authorize('x'.repeat(30))).toBe(false)
-    const peer = { send() {}, close() {}, authed: false }
-    await room.message(peer, JSON.stringify({ t: 'hello', v: 1, token: 'x'.repeat(30), cursor: 0 }), [peer])
-    expect(await room.authorize('x'.repeat(30))).toBe(true)
-    expect(await room.authorize('y'.repeat(30))).toBe(false)
-    expect(await room.authorize(undefined)).toBe(false)
-    const now = 10 * 3_600_000
-    for (let i = 0; i < ORGANIZE_PER_HOUR; i++) expect(room.takeOrganize(now)).toBe(true)
-    expect(room.takeOrganize(now + 1000)).toBe(false)
-    expect(room.takeOrganize(now + 3_600_000)).toBe(true)
+describe('organize (Workers AI key)', () => {
+  const ACCOUNT = '0123456789abcdef0123456789abcdef'
+  const TOKEN = 'x'.repeat(40)
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('is off by default', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grove-settings-'))
+    expect(new Settings(join(dir, 'grove-settings.json')).get().autoOrganize).toBe(false)
+  })
+
+  it('checks what was typed in', () => {
+    expect(checkKey(` ${ACCOUNT.toUpperCase()} `, ` ${TOKEN}\n`)).toEqual({ accountId: ACCOUNT, token: TOKEN })
+    expect(() => checkKey('nope', TOKEN)).toThrow(/account id/)
+    expect(() => checkKey(ACCOUNT, 'short')).toThrow(/token/)
+  })
+
+  it("runs models on the user's account", async () => {
+    const fetch = vi.fn(async () => Response.json({ success: true, result: { response: 'hi' } }))
+    vi.stubGlobal('fetch', fetch)
+    expect(await workersAi({ accountId: ACCOUNT, token: TOKEN }).run(NAMER, { messages: [] })).toEqual({ response: 'hi' })
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe(`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/ai/run/${NAMER}`)
+    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${TOKEN}`)
+    fetch.mockImplementation(async () => Response.json({ success: false, errors: [{ message: 'no' }] }, { status: 403 }))
+    await expect(workersAi({ accountId: ACCOUNT, token: TOKEN }).run(NAMER, {})).rejects.toThrow('Cloudflare: 403 no')
+  })
+
+  it('keeps a key Cloudflare takes, readable only by the user, and never tells the windows the token', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grove-ai-'))
+    const keys = new WorkersAiKeys(dir, () => {})
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: false }, { status: 401 })))
+    await keys.set(ACCOUNT, TOKEN)
+    expect(keys.status().error).toMatch(/doesn’t take/)
+    expect(keys.runner()).toBeUndefined()
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: true, result: { status: 'active' } })))
+    await keys.set(ACCOUNT, TOKEN)
+    expect(keys.status()).toEqual({ accountId: ACCOUNT, busy: undefined, error: undefined })
+    expect(JSON.stringify(keys.status())).not.toContain(TOKEN)
+    expect(statSync(keyPath(dir)).mode & 0o777).toBe(0o600)
+    expect(new WorkersAiKeys(dir, () => {}).runner()).toBeDefined()
+    keys.clear()
+    expect(new WorkersAiKeys(dir, () => {}).runner()).toBeUndefined()
   })
 })
 

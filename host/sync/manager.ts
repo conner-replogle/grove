@@ -4,8 +4,8 @@
 import type { SyncStatus } from '../../shared/protocol.ts'
 import { probe, SyncClient, type SyncConfig, type SyncHost } from './client.ts'
 import { readSyncConfig, removeSyncConfig, statePath, writeSyncConfig } from './config.ts'
-import { deriveKeys, newSecret } from './crypto.ts'
-import type { OrganizeAuth } from '../organize.ts'
+import { newSecret } from './crypto.ts'
+import { DEFAULT_SYNC_SERVER } from '../../shared/sync-protocol.ts'
 import type { Scope } from './records.ts'
 
 // A sync code: the server and the account's secret, '<server>#<secret>'.
@@ -19,7 +19,7 @@ export function parseSyncCode(code: string): SyncConfig {
 
 export function checkServer(url: string): string {
   const u = url.trim().replace(/\/+$/, '')
-  if (!/^https?:\/\/[^\s/]+/.test(u)) throw new Error('Give the sync server as a URL, like https://grove-ui-sync.you.workers.dev')
+  if (!/^https?:\/\/[^\s/]+/.test(u)) throw new Error('Give the sync server as a URL, like https://sync.example.com')
   return u
 }
 
@@ -80,22 +80,16 @@ export class SyncManager {
     this.client?.flush()
   }
 
-  // The server and account Organize asks, while sync is on.
-  async organizeAuth(): Promise<OrganizeAuth | undefined> {
-    if (!this.config) return undefined
-    const { account, token } = await deriveKeys(this.config.secret)
-    return { server: this.config.url, account, token }
-  }
-
   setScope(scope: Scope): void {
     void this.client?.setScope(scope)
   }
 
-  // A new sync account on `server`, with this device's workspaces in it.
-  setup(server: string): Promise<void> {
+  // A new sync account on `server` (the public one if none), with this
+  // device's workspaces in it. An invite-only server wants an invite code.
+  setup(server?: string, invite?: string): Promise<void> {
     return this.attempt('setup', async () => {
-      const config = { url: checkServer(server), secret: newSecret() }
-      await probe(config.url, config.secret)
+      const config = { url: checkServer(server?.trim() || DEFAULT_SYNC_SERVER), secret: newSecret() }
+      await probe(config.url, config.secret, invite?.trim() || undefined)
       return config
     })
   }

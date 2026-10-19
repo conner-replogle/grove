@@ -89,9 +89,10 @@ export function countRecords(records: Iterable<[string, SyncRecord]>): ClientSta
   return counts
 }
 
-// Says hello to a sync server with a secret's account and token: resolves
+// Says hello to a sync server with a secret's account and token (and, to
+// start an account on an invite-only server, an invite code): resolves
 // once it answers ready, rejects with what went wrong.
-export async function probe(server: string, secret: string, timeoutMs = 10_000): Promise<void> {
+export async function probe(server: string, secret: string, invite?: string, timeoutMs = 10_000): Promise<void> {
   const keys = await deriveKeys(secret)
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(socketUrl(server, keys.account))
@@ -106,7 +107,7 @@ export async function probe(server: string, secret: string, timeoutMs = 10_000):
       if (err) reject(err)
       else resolve()
     }
-    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', v: SYNC_PROTOCOL, token: keys.token, cursor: 0 } satisfies ClientMessage))
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', v: SYNC_PROTOCOL, token: keys.token, cursor: 0, invite } satisfies ClientMessage))
     ws.onmessage = (ev) => {
       const msg = JSON.parse(String(ev.data)) as ServerMessage
       if (msg.t === 'error') end(new Error(`the server says: ${msg.message}`))

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Publishes a Grove release on GitHub, which installed copies offer as an
-# update (host/updates.ts):
+# Starts a Grove release, which installed copies offer as an update
+# (host/updates.ts):
 #
 #   scripts/release.sh 0.2.0          # or: pnpm release 0.2.0
 #
 # Checks the tree is clean and the tests pass, sets package.json's version,
-# commits and tags v<version>, builds the UI, packs what the launcher needs
-# (the same files install.sh copies) into grove-ui-<version>.tar.gz, pushes
-# the commit and tag, and creates the release with that tarball attached and
-# notes from the commits since the last release. Needs the GitHub CLI (gh).
+# commits and tags v<version>, and pushes both. The tag starts the Release
+# workflow (.github/workflows/release.yml), which builds the UI tarball and
+# every platform's bundle and DMG and publishes the release. Needs the
+# GitHub CLI (gh) to follow it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -48,14 +48,8 @@ node -e "
 git commit -qm "Release $tag" package.json
 git tag -a "$tag" -m "Grove $version"
 
-node build.mjs
-out="$(mktemp -d)"
-tarball="$out/grove-ui-$version.tar.gz"
-tar -czf "$tarball" launcher host shared extension dist package.json
-
 branch="$(git rev-parse --abbrev-ref HEAD)"
 git push origin "$branch" "$tag"
-previous="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
-gh release create "$tag" "$tarball" --title "Grove $version" --generate-notes ${previous:+--notes-start-tag "$previous"}
-rm -rf "$out"
-echo "released $tag"
+echo "pushed $tag; the Release workflow builds and publishes it:"
+sleep 5
+gh run list --workflow release.yml --limit 1

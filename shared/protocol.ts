@@ -72,10 +72,11 @@ export interface GroveSettings {
   // Unload a tab no window has shown for this many minutes (0: never).
   unloadAfter: number
   // Organize loose tabs into folders when the computer goes idle, and a
-  // page opened in a new tab once it loads (needs sync).
+  // page opened in a new tab once it loads (needs a Workers AI key). Off
+  // unless the user turns it on.
   autoOrganize: boolean
 }
-export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true, unloadAfter: 20, autoOrganize: true }
+export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true, unloadAfter: 20, autoOrganize: false }
 export const UNLOAD_CHOICES = [0, 5, 10, 20, 30, 60, 120]
 
 export interface SyncStatus {
@@ -91,6 +92,16 @@ export interface SyncStatus {
   code?: string
   // A setup or join under way, and what went wrong with the last one.
   busy?: 'setup' | 'join'
+  error?: string
+}
+
+// The Workers AI key Organize runs on (host/workers-ai.ts). The token
+// never leaves the host.
+export interface WorkersAiStatus {
+  // Set when there's a key.
+  accountId?: string
+  // A key being checked with Cloudflare, and why the last one wasn't taken.
+  busy?: boolean
   error?: string
 }
 
@@ -149,8 +160,10 @@ export interface WindowState {
   settings: GroveSettings
   sync: SyncStatus
   downloads: DownloadView[]
-  // Organize, for the window's workspace: under way, and the last failure.
-  organize: { busy: boolean; error?: string }
+  // Organize, for the window's workspace: whether it can run (there's a
+  // Workers AI key), under way, and the last failure.
+  organize: { available: boolean; busy: boolean; error?: string }
+  workersAi: WorkersAiStatus
   update?: UpdateStatus
 }
 
@@ -198,10 +211,15 @@ export type HostCommand =
   | { type: 'deleteWorkspace'; workspaceId: string }
   | { type: 'answerPermission'; id: string; decision: PermissionDecision }
   | { type: 'setSettings'; settings: Partial<GroveSettings> }
-  // Starts a new sync account on a server, or joins one with a sync code.
-  | { type: 'syncSetup'; server: string }
+  // Starts a new sync account on a server (the public one if none), with
+  // an invite code if the server is invite only, or joins one with a sync
+  // code.
+  | { type: 'syncSetup'; server?: string; invite?: string }
   | { type: 'syncJoin'; code: string }
   | { type: 'syncOff' }
+  // Organize's Workers AI key: a Cloudflare account id and API token.
+  | { type: 'setWorkersAi'; accountId: string; token: string }
+  | { type: 'clearWorkersAi' }
   | { type: 'download'; id: number; action: DownloadAction }
   // Takes finished and failed downloads off the list (the files stay).
   | { type: 'clearDownloads' }

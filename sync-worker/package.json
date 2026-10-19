@@ -2,7 +2,7 @@
   "name": "grove-sync-worker",
   "private": true,
   "type": "module",
-  "description": "Grove's sync server: an end-to-end encrypted log per account on a Cloudflare Durable Object",
+  "description": "Grove's sync server: an end-to-end encrypted log per account on a Cloudflare Durable Object, invite only",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

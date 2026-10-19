@@ -1,0 +1,41 @@
+{
+  "//": "The Chromium and Node a Grove bundle ships (scripts/bundle.mjs). Changing either makes the next release a full update: installed copies download the whole bundle, not just the UI.",
+  "chromium": {
+    "version": "155.0.8059.84",
+    "linux-x64": {
+      "url": "https://github.com/ungoogled-software/ungoogled-chromium-portablelinux/releases/download/155.0.8059.84-1/ungoogled-chromium-155.0.8059.84-1-x86_64_linux.tar.xz",
+      "sha256": "7e376c47b2650f846984f32e4962b33703e5abe09681009cf4f3f336e1125f13"
+    },
+    "linux-arm64": {
+      "url": "https://github.com/ungoogled-software/ungoogled-chromium-portablelinux/releases/download/155.0.8059.84-1/ungoogled-chromium-155.0.8059.84-1-arm64_linux.tar.xz",
+      "sha256": "5b4de24d19d7a5e5240233a4efd2f1f62be50f82793ee1b90673479148474ade"
+    },
+    "macos-arm64": {
+      "url": "https://github.com/ungoogled-software/ungoogled-chromium-macos/releases/download/155.0.8059.84-1.1/ungoogled-chromium_155.0.8059.84-1.1_arm64-macos.dmg",
+      "sha256": "a91ffff0da8587ec253c01c246beb4ae59a8fd4e221b76374ec0a5ed5f987b6c"
+    },
+    "macos-x64": {
+      "url": "https://github.com/ungoogled-software/ungoogled-chromium-macos/releases/download/155.0.8059.84-1.1/ungoogled-chromium_155.0.8059.84-1.1_x86_64-macos.dmg",
+      "sha256": "1123f91bb16e67558ab961974527d3c8b24d5d1f05e7a249430f2caae3530130"
+    }
+  },
+  "node": {
+    "version": "26.8.2",
+    "linux-x64": {
+      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-linux-x64.tar.xz",
+      "sha256": "40e1d3225c1c9ae9a2671c98ecb9857e4d5555026394f348645676798840d5c5"
+    },
+    "linux-arm64": {
+      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-linux-arm64.tar.xz",
+      "sha256": "81d8f0fdea9dcd3bfdcfeafc5f8359c151f097e9880b0007c0645ca670d07971"
+    },
+    "macos-arm64": {
+      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-darwin-arm64.tar.xz",
+      "sha256": "f58e5044b938a3174184de4aaf1d2bbfcfff812e88220ff08e9221c09f5c8677"
+    },
+    "macos-x64": {
+      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-darwin-x64.tar.xz",
+      "sha256": "49950999366bf6cd47c8c8fd3593aa82fb5efed494937b380b85677338285ca0"
+    }
+  }
+}

@@ -16,11 +16,16 @@
 //
 // sets up syncing with other devices (see sync-cli.mjs).
 //
-//   GROVE_CHROME   the browser binary     (default: the system chromium; any
-//                  Chromium 152+ with Webium works, e.g. ungoogled-chromium.
-//                  Not the Grove Chromium fork: its own C++ workspace service
-//                  restores and mirrors tabs itself and fights this host)
-//   GROVE_PROFILE  the profile directory  (default ~/.config/grove-webium)
+//   GROVE_CHROME   the browser binary     (an installed bundle's own; else
+//                  the system chromium. Any Chromium 152+ with Webium works,
+//                  e.g. ungoogled-chromium. Not the Grove Chromium fork: its
+//                  own C++ workspace service restores and mirrors tabs
+//                  itself and fights this host)
+//   GROVE_PROFILE  the profile directory  (default ~/.config/grove-webium,
+//                  on macOS ~/Library/Application Support/Grove/Profile)
+//
+// An installed bundle's start script (packaging/) also sets GROVE_BUNDLE,
+// the bundle the updater may replace, and GROVE_RELAUNCH, what restarts it.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, watch, writeFileSync } from 'node:fs'
@@ -33,12 +38,15 @@ import { Store } from '../host/store.ts'
 import { Settings } from '../host/settings.ts'
 import { SyncManager } from '../host/sync/manager.ts'
 import { Updater } from '../host/updates.ts'
+import { WorkersAiKeys } from '../host/workers-ai.ts'
 import { UI_BINDING, UI_RECEIVER } from '../shared/protocol.ts'
 import { PipeCDP } from './cdp.mjs'
 
 const home = homedir()
-const CHROME = process.env.GROVE_CHROME ?? '/usr/bin/chromium'
-const PROFILE = process.env.GROVE_PROFILE ?? `${home}/.config/grove-webium`
+const mac = process.platform === 'darwin'
+const CHROME = process.env.GROVE_CHROME ?? (mac ? '/Applications/Chromium.app/Contents/MacOS/Chromium' : '/usr/bin/chromium')
+const PROFILE =
+  process.env.GROVE_PROFILE ?? (mac ? `${home}/Library/Application Support/Grove/Profile` : `${home}/.config/grove-webium`)
 const FEATURES = 'Webium,SurfaceEmbed,ExtensionsMenuAccessControl'
 const BUNDLE = fileURLToPath(new URL('../dist/grove-ui.js', import.meta.url))
 const EXTENSION_SOURCE = fileURLToPath(new URL('../extension', import.meta.url))
@@ -160,7 +168,7 @@ chrome.on('exit', (code) => {
   host.flush()
   sync.flush()
   if (relaunch) {
-    const bin = join(home, '.local/bin/grove')
+    const bin = process.env.GROVE_RELAUNCH ?? join(home, '.local/bin/grove')
     const [cmd, args] = existsSync(bin) ? [bin, []] : [process.execPath, [fileURLToPath(import.meta.url)]]
     spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref()
   }
@@ -240,10 +248,13 @@ const sync = new SyncManager({
 })
 host.settings = settings
 host.sync = sync
+// Organize's Workers AI key, given in the settings.
+host.workersAi = new WorkersAiKeys(PROFILE, () => host.refresh())
 
 // Newer releases (host/updates.ts), offered in the windows.
 const updater = new Updater({
   appDir: fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, ''),
+  bundleDir: process.env.GROVE_BUNDLE,
   onChange: () => host.refresh(),
   log: (...a) => console.log('[grove]', ...a)
 })

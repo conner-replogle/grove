@@ -1,0 +1,71 @@
+# Builds and publishes a Grove release when scripts/release.sh pushes a
+# v* tag: the UI tarball (what most updates download), a bundle per
+# platform (scripts/bundle.mjs; what the installer and full updates
+# download), the macOS DMGs, install.sh and SHA256SUMS over all of them.
+# The release is published only once every platform has built.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm exec vitest run
+      - name: UI tarball
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test "$(node -p 'require("./package.json").version')" = "$version"
+          node build.mjs
+          mkdir -p release
+          tar -czf "release/grove-ui-$version.tar.gz" launcher host shared extension dist package.json
+      - run: node scripts/bundle.mjs linux-x64
+      - run: node scripts/bundle.mjs linux-arm64
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux
+          path: release/*
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/bundle.mjs macos-arm64
+      - run: node scripts/bundle.mjs macos-x64
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos
+          path: release/*
+
+  publish:
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v5
+        with:
+          path: release
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp packaging/install.sh release/
+          cd release
+          sha256sum -- * > SHA256SUMS
+          previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          gh release create "$GITHUB_REF_NAME" -- * \
+            --title "Grove ${GITHUB_REF_NAME#v}" --generate-notes ${previous:+--notes-start-tag "$previous"}

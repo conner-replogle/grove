@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MemoryStore, Room, type Peer } from '../sync-worker/src/room.ts'
+import { InviteBook, MemoryInviteStore, normalizeInvite } from '../sync-worker/src/invites.ts'
+import { MAX_ACCOUNT_BYTES, MAX_BLOB } from '../shared/sync-protocol.ts'
 import * as M from '../host/model.ts'
 import { SyncClient } from '../host/sync/client.ts'
 import { deriveKeys, newSecret, seal, unseal } from '../host/sync/crypto.ts'
@@ -343,5 +345,72 @@ describe('sync between devices', () => {
     await room.message(other, JSON.stringify({ t: 'hello', v: 1, token: 'b'.repeat(43), cursor: 0 }), [other])
     expect(other.authed).toBe(false)
     expect(sent.at(-1)).toContain('wrong token')
+  })
+})
+
+describe('invite-only server', () => {
+  const hello = (token: string, invite?: string) => JSON.stringify({ t: 'hello', v: 1, token, cursor: 0, invite })
+  const peer = (sent: string[]): Peer => ({ send: (m) => sent.push(m), close: () => {}, authed: false })
+  const roomFor = (book: InviteBook, account: string, store = new MemoryStore()) =>
+    new Room(store, { redeem: async (code) => book.redeem(code, account) })
+
+  it('starts an account only with an unused invite', async () => {
+    const book = new InviteBook(new MemoryInviteStore())
+    const { code } = book.create('for sam')
+    const sent: string[] = []
+
+    const a = roomFor(book, 'a'.repeat(32))
+    const p1 = peer(sent)
+    await a.message(p1, hello('t'.repeat(43)), [p1])
+    expect(p1.authed).toBe(false)
+    expect(sent.at(-1)).toContain('invite only')
+    const p2 = peer(sent)
+    await a.message(p2, hello('t'.repeat(43), 'ZZZZ-ZZZZ-ZZZZ'), [p2])
+    expect(p2.authed).toBe(false)
+    // Typed loosely: lower case, no dashes.
+    const p3 = peer(sent)
+    await a.message(p3, hello('t'.repeat(43), code.toLowerCase().replace(/-/g, '')), [p3])
+    expect(p3.authed).toBe(true)
+
+    // Spent: another account can't use it, this one can again.
+    const b = roomFor(book, 'b'.repeat(32))
+    const p4 = peer(sent)
+    await b.message(p4, hello('u'.repeat(43), code), [p4])
+    expect(p4.authed).toBe(false)
+    expect(book.redeem(code, 'a'.repeat(32))).toBe(true)
+    expect(book.list()[0]).toMatchObject({ code, note: 'for sam', account: 'a'.repeat(32) })
+    expect(book.revoke(code)).toBe(false)
+  })
+
+  it('lets accounts that already sync on without an invite', async () => {
+    const store = new MemoryStore()
+    store.put('token', 'whatever')
+    const book = new InviteBook(new MemoryInviteStore())
+    const sent: string[] = []
+    const p = peer(sent)
+    await roomFor(book, 'a'.repeat(32), store).message(p, hello('t'.repeat(43)), [p])
+    // Turned away for the wrong token, not for the missing invite.
+    expect(sent.at(-1)).toContain('wrong token')
+  })
+
+  it('makes readable codes and takes back unused ones', () => {
+    const book = new InviteBook(new MemoryInviteStore())
+    const { code } = book.create()
+    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/)
+    expect(normalizeInvite('abcd efgh ijkl')).toBe('ABCD-EFGH-1JK1')
+    expect(book.revoke(code)).toBe(true)
+    expect(book.redeem(code, 'a'.repeat(32))).toBe(false)
+  })
+
+  it("caps what an account keeps", async () => {
+    const room = new Room(new MemoryStore())
+    const sent: string[] = []
+    const p = peer(sent)
+    await room.message(p, hello('t'.repeat(43)), [p])
+    const blob = 'x'.repeat(MAX_BLOB)
+    for (let i = 0; i < MAX_ACCOUNT_BYTES / MAX_BLOB; i++) await room.message(p, JSON.stringify({ t: 'push', id: i, blob }), [p])
+    expect(sent.at(-1)).toContain('ack')
+    await room.message(p, JSON.stringify({ t: 'push', id: 999, blob: 'x' }), [p])
+    expect(sent.at(-1)).toContain('full')
   })
 })

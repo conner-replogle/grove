@@ -4,12 +4,18 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-26",
   "durable_objects": {
-    "bindings": [{ "name": "SYNC", "class_name": "SyncRoom" }]
+    "bindings": [
+      { "name": "SYNC", "class_name": "SyncRoom" },
+      { "name": "INVITES", "class_name": "Invites" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncRoom"] }],
-  // Only these accounts (ids from `grove sync status`) may use this server.
-  "vars": { "ACCOUNTS": "e657ecb0f11ad6778e6b905836b4061a" },
-  // Organize (src/organize.ts) runs Clef-flash and a small LLM here.
-  "ai": { "binding": "AI" },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SyncRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["Invites"] }
+  ],
+  // Invite only: new accounts need a code from `grove sync invite`, made
+  // with the ADMIN_TOKEN secret (wrangler secret put ADMIN_TOKEN). Set
+  // OPEN_SIGNUP to "true" to let anyone start an account.
+  "vars": { "OPEN_SIGNUP": "false" },
   "observability": { "enabled": true }
 }
