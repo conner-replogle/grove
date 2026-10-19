@@ -6,13 +6,21 @@
 // Connect to <server>/v1/<account> and say hello. The server replies with
 // the snapshot if the device is behind it, every later change, then ready.
 // After that, changes pushed by other devices arrive as they come.
+//
+// The first hello for an account sets its token. A server that's invite
+// only (the public one) wants an invite code in that hello, and only then.
 
 export const SYNC_PROTOCOL = 1
 // The biggest sealed blob the server takes.
 export const MAX_BLOB = 1 << 20
+// The most an account may keep on the server, snapshot and log together.
+export const MAX_ACCOUNT_BYTES = 64 << 20
+
+// The public sync server, invite only.
+export const DEFAULT_SYNC_SERVER = 'https://grove-ui-sync.connerreplogle.workers.dev'
 
 export type ClientMessage =
-  | { t: 'hello'; v: number; token: string; cursor: number }
+  | { t: 'hello'; v: number; token: string; cursor: number; invite?: string }
   | { t: 'push'; id: number; blob: string }
   // The device's whole state, sealed, as of change `seq`: the log up to
   // there can go.

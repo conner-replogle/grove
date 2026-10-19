@@ -7,12 +7,13 @@
 // is instant; the idle sweep (unloadIdle) frees pages no window has shown
 // for a while. (Decision 2 had workspaces no window shows keep no pages,
 // which made every return to a workspace reload its tabs from scratch.)
-import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type UpdateStatus, type WindowState } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type UpdateStatus, type WindowState, type WorkersAiStatus } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import * as M from './model.ts'
 import { leaves } from './split.ts'
-import { applyOrganize, looseTabs, prepare, requestOrganize, sendableUrl, type OrganizeAuth } from './organize.ts'
+import { applyOrganize, looseTabs, prepare, sendableUrl } from './organize.ts'
+import { organize as runOrganize, type AiRunner } from './organize-ai.ts'
 import type { Settings } from './settings.ts'
 import { keptByHost, type SitePermissions } from './site-permissions.ts'
 import type { Store } from './store.ts'
@@ -75,11 +76,18 @@ export interface UpdateControl {
 // Sync as the settings page drives it (host/sync/manager.ts).
 export interface SyncControl {
   status(): SyncStatus
-  setup(server: string): Promise<void>
+  setup(server?: string, invite?: string): Promise<void>
   join(code: string): Promise<void>
   off(): void
   setScope(scope: { unpinnedTabs: boolean }): void
-  organizeAuth(): Promise<OrganizeAuth | undefined>
+}
+
+// Organize's Workers AI key, as the settings page drives it (host/workers-ai.ts).
+export interface WorkersAiControl {
+  status(): WorkersAiStatus
+  runner(): AiRunner | undefined
+  set(accountId: string, token: string): Promise<void>
+  clear(): void
 }
 
 interface Binding {
@@ -159,6 +167,7 @@ export class GroveHost {
   onModelChange?: () => void
   settings?: Settings
   sync?: SyncControl
+  workersAi?: WorkersAiControl
   updates?: UpdateControl
   // Quits Grove and starts it again (the launcher's).
   restart?: () => void
@@ -597,11 +606,15 @@ export class GroveHost {
         return this.pushAll()
       }
       case 'syncSetup':
-        return this.sync?.setup(c.server)
+        return this.sync?.setup(c.server, c.invite)
       case 'syncJoin':
         return this.sync?.join(c.code)
       case 'syncOff':
         return this.sync?.off()
+      case 'setWorkersAi':
+        return this.workersAi?.set(c.accountId, c.token)
+      case 'clearWorkersAi':
+        return this.workersAi?.clear()
       case 'download':
         return void (await this.bridge?.call('downloadAction', { id: c.id, action: c.action }).catch((e: unknown) => this.log('download', e)))
       case 'clearDownloads':
@@ -975,8 +988,8 @@ export class GroveHost {
     return this.settings?.get().autoOrganize ?? DEFAULT_SETTINGS.autoOrganize
   }
 
-  // Sorts a workspace's loose tabs into folders through the sync server
-  // (host/organize.ts): all of them for the button; while the user is away
+  // Sorts a workspace's loose tabs into folders with Workers AI, on the
+  // user's own key (host/organize.ts): all of them for the button; while the user is away
   // ('idle'), all but the tabs windows show, and only once a tab has turned
   // up since last time, so a tab the user took out of a folder stays out;
   // or just a page the user opened in a new tab, which can only join a
@@ -991,14 +1004,14 @@ export class GroveHost {
     const hasFolders = ws.groups.some((g) => !g.pinned)
     if (!tabs.length || (!hasFolders && tabs.length < (mode === 'button' ? 2 : 3))) return
     if (mode === 'idle' && tabs.every((e) => this.organized.get(e.id) === e.url)) return
-    const auth = await this.sync?.organizeAuth()
-    if (!auth) return
+    const ai = this.workersAi?.runner()
+    if (!ai) return
     this.organizing.add(workspaceId)
     this.organizeError = undefined
     this.pushAll()
     try {
       const { request, ids } = prepare(ws, tabs)
-      const answer = await requestOrganize(auth, request)
+      const answer = await runOrganize(ai, request)
       for (const e of tabs) this.organized.set(e.id, e.url)
       this.log(`organize: ${Object.keys(answer.assign).length} into folders, ${answer.create.length} new folder(s)`)
       if (this.model.workspaces.some((w) => w.id === workspaceId)) {
@@ -1287,7 +1300,8 @@ export class GroveHost {
       settings: this.settings?.get() ?? DEFAULT_SETTINGS,
       sync: this.sync?.status() ?? { state: 'off', pending: 0 },
       downloads: this.downloads,
-      organize: { busy: this.organizing.has(ws.id), error: this.organizeError },
+      organize: { available: !!this.workersAi?.status().accountId, busy: this.organizing.has(ws.id), error: this.organizeError },
+      workersAi: this.workersAi?.status() ?? {},
       update: this.updateOffer()
     }
   }

@@ -1,15 +1,11 @@
-// Organize (shared/organize-protocol.ts): sorts loose tabs into folders in
-// two steps, to keep the bill small. Clef-flash, a decision model, picks
-// each tab's folder from the ones the workspace has, or "none of these".
-// Only the tabs left over go to a small LLM, which makes up new folders.
-import {
-  ORGANIZE_MAX_FOLDERS,
-  ORGANIZE_MAX_TABS,
-  type OrganizeRequest,
-  type OrganizeResponse
-} from '../../shared/organize-protocol.ts'
+// Organize's models (shared/organize-protocol.ts): sorts loose tabs into
+// folders in two steps, to keep the bill small. Clef-flash, a decision
+// model, picks each tab's folder from the ones the workspace has, or "none
+// of these". Only the tabs left over go to a small LLM, which makes up new
+// folders.
+import type { OrganizeRequest, OrganizeResponse } from '../shared/organize-protocol.ts'
 
-// The part of the Workers AI binding this uses.
+// Runs a Workers AI model (host/workers-ai.ts, with the user's own key).
 export interface AiRunner {
   run(model: string, input: unknown): Promise<unknown>
 }
@@ -24,22 +20,6 @@ const QUESTIONS_PER_CALL = 64
 // How sure Clef must be to put a tab in a folder; less, and it stays put.
 const ASSIGN_AT = 0.6
 const NEW = 'new'
-
-export class BadRequest extends Error {}
-
-export function checkRequest(body: unknown): OrganizeRequest {
-  const r = body as OrganizeRequest
-  const str = (s: unknown, max: number) => typeof s === 'string' && s.length <= max
-  if (!r || !Array.isArray(r.folders) || !Array.isArray(r.tabs)) throw new BadRequest('expected folders and tabs')
-  if (r.tabs.length > ORGANIZE_MAX_TABS || r.folders.length > ORGANIZE_MAX_FOLDERS) throw new BadRequest('too many')
-  for (const f of r.folders) {
-    if (!str(f?.id, 64) || !str(f.title, 200) || !Array.isArray(f.examples) || !f.examples.every((e) => str(e, 300))) {
-      throw new BadRequest('bad folder')
-    }
-  }
-  for (const t of r.tabs) if (!str(t?.id, 64) || !str(t.title, 300) || !str(t.url, 500)) throw new BadRequest('bad tab')
-  return { folders: r.folders.map((f) => ({ ...f, examples: f.examples.slice(0, 3) })), tabs: r.tabs }
-}
 
 export async function organize(ai: AiRunner, req: OrganizeRequest): Promise<OrganizeResponse> {
   const assign: Record<string, string> = {}

@@ -59,12 +59,28 @@ with one Durable Object per account) only stores sealed change batches and
 hands them on; devices do all merging. One secret gives each device the
 account id, the server token and the AES-GCM key.
 
+Grove's public sync server is invite only: a new account needs an invite
+code, from the settings (Sync → Or start syncing) or the CLI. Devices that
+join an account with its sync code need no invite.
+
 ```sh
-cd sync-worker && pnpm install && pnpm run deploy   # once: your own sync server
-grove sync setup https://grove-ui-sync.<you>.workers.dev
-grove sync join <url> <secret>                      # on each other device
+grove sync setup --invite XXXX-XXXX-XXXX           # a new account, on the public server
+grove sync join <sync-code>                         # on each other device
 grove sync status
 ```
 
-Set `ACCOUNTS` (comma-separated account ids, from `grove sync status`) on
-the Worker to turn away anyone else.
+To run your own server: `cd sync-worker && pnpm install && pnpm run deploy`,
+then `wrangler secret put ADMIN_TOKEN` and give its URL to
+`grove sync setup`. The admin makes invites with
+`GROVE_SYNC_ADMIN_TOKEN=<token> grove sync invite [note] --server <url>`
+(`invites` lists them, `revoke <code>` takes back an unused one). Set
+`OPEN_SIGNUP` to `"true"` in `wrangler.jsonc` to need no invites.
+
+## Organize
+
+Organize sorts a workspace's loose tabs into folders with Cloudflare Workers
+AI, on the user's own Cloudflare account: it's off until they give a
+Workers AI account ID and API token in the settings. The token stays on
+the device (`<profile>/grove-workers-ai.json`). Organize is NOT end-to-end
+encrypted: the titles and addresses (without queries) of the tabs it sorts
+go to Cloudflare.

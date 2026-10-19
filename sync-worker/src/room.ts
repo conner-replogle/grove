@@ -1,9 +1,10 @@
 // One account's sync log, as the server keeps it: sealed change batches
 // numbered in order, and at most one sealed snapshot standing in for the
 // log up to its number. The server can't read any of it; it only checks
-// the account's token, numbers what comes in and hands it on.
+// the account's token, numbers what comes in and hands it on. On an
+// invite-only server, an account no device has used yet takes an invite.
 // Kept apart from the Durable Object so tests can run it in memory.
-import { MAX_BLOB, SYNC_PROTOCOL, type ClientMessage, type ServerMessage } from '../../shared/sync-protocol.ts'
+import { MAX_ACCOUNT_BYTES, MAX_BLOB, SYNC_PROTOCOL, type ClientMessage, type ServerMessage } from '../../shared/sync-protocol.ts'
 
 export interface RoomStore {
   get(key: string): string | undefined
@@ -13,6 +14,14 @@ export interface RoomStore {
   since(seq: number): { seq: number; blob: string }[]
   dropThrough(seq: number): void
   count(): number
+  // The log's size, in characters of sealed blobs.
+  bytes(): number
+}
+
+export interface RoomOptions {
+  // Uses up an invite for this account (true if it was good, or already
+  // this account's). Without it, anyone may start an account.
+  redeem?: (invite: string) => Promise<boolean>
 }
 
 export interface Peer {
@@ -21,9 +30,6 @@ export interface Peer {
   authed: boolean
 }
 
-// Organize runs (Workers AI calls) an account may make in an hour.
-export const ORGANIZE_PER_HOUR = 30
-
 async function sha256(s: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
@@ -31,27 +37,11 @@ async function sha256(s: string): Promise<string> {
 
 export class Room {
   private readonly store: RoomStore
+  private readonly redeem?: (invite: string) => Promise<boolean>
 
-  constructor(store: RoomStore) {
+  constructor(store: RoomStore, opts: RoomOptions = {}) {
     this.store = store
-  }
-
-  // Whether a token is this account's. An account no device has synced
-  // with yet has no token, so nothing is.
-  async authorize(token: unknown): Promise<boolean> {
-    const known = this.store.get('token')
-    return typeof token === 'string' && !!known && (await sha256(token)) === known
-  }
-
-  // Counts an organize request against the account's hourly allowance;
-  // false once it's used up.
-  takeOrganize(now = Date.now()): boolean {
-    const hour = Math.floor(now / 3_600_000)
-    const used = JSON.parse(this.store.get('organize') ?? '{}') as { hour?: number; n?: number }
-    const n = used.hour === hour ? (used.n ?? 0) : 0
-    if (n >= ORGANIZE_PER_HOUR) return false
-    this.store.put('organize', JSON.stringify({ hour, n: n + 1 }))
-    return true
+    this.redeem = opts.redeem
   }
 
   private head(): number {
@@ -73,8 +63,14 @@ export class Room {
     if (msg.t === 'hello') {
       if (msg.v !== SYNC_PROTOCOL) return fail(`unsupported protocol ${msg.v}`)
       if (typeof msg.token !== 'string' || msg.token.length < 20) return fail('bad token')
-      // The first device to connect sets the account's token.
+      // The first device to connect sets the account's token, with an
+      // invite if the server wants one.
       const hash = await sha256(msg.token)
+      if (!this.store.get('token') && this.redeem) {
+        if (typeof msg.invite !== 'string' || !msg.invite.trim()) return fail('this server is invite only: give an invite code')
+        if (!(await this.redeem(msg.invite.trim()))) return fail('that invite code is used up or unknown')
+      }
+      // Another device may have set it while the invite was checked.
       const known = this.store.get('token')
       if (!known) this.store.put('token', hash)
       else if (known !== hash) return fail('wrong token for this account')
@@ -93,6 +89,8 @@ export class Room {
     if (!peer.authed) return fail('say hello first')
     if (msg.t === 'push') {
       if (typeof msg.blob !== 'string' || msg.blob.length > MAX_BLOB) return fail('bad blob')
+      const kept = this.store.bytes() + (this.store.get('snapshot')?.length ?? 0)
+      if (kept + msg.blob.length > MAX_ACCOUNT_BYTES) return fail('this account is full on the server')
       const seq = this.store.append(msg.blob)
       this.store.put('head', String(seq))
       send({ t: 'ack', id: msg.id, seq })
@@ -136,5 +134,8 @@ export class MemoryStore implements RoomStore {
   }
   count() {
     return this.log.length
+  }
+  bytes() {
+    return this.log.reduce((n, e) => n + e.blob.length, 0)
   }
 }

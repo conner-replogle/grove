@@ -1,9 +1,11 @@
 // Grove's settings: a card over the page, opened from the gear at the
 // bottom of the sidebar. Sync (its state, what it syncs, the sync code
-// that joins another device, joining or starting one, turning it off) and
-// general settings. The host keeps them; this only shows and sends.
+// that joins another device, joining or starting one with an invite,
+// turning it off), Organize (its Workers AI key) and general settings.
+// The host keeps them; this only shows and sends.
 import closeSvg from 'lucide-static/icons/x.svg'
 import { UNLOAD_CHOICES, type GroveSettings, type SyncStatus, type WindowState } from '../shared/protocol.ts'
+import { DEFAULT_SYNC_SERVER } from '../shared/sync-protocol.ts'
 import { send, subscribe } from './host-client'
 import { svg } from './svg'
 
@@ -53,12 +55,21 @@ class SettingsView {
   private readonly offPart = el('div', 'grove-settings-group')
   private readonly joinInput = input('Paste a sync code from another device')
   private readonly joinButton = el('button', 'grove-settings-button primary', 'Join')
-  private readonly serverInput = input('https://grove-ui-sync.you.workers.dev')
+  private readonly inviteInput = input('Invite code')
+  private readonly serverInput = input(`Server (empty: ${DEFAULT_SYNC_SERVER.replace(/^https:\/\//, '')})`)
   private readonly setupButton = el('button', 'grove-settings-button', 'Set up')
   private readonly error = el('div', 'grove-settings-error')
+  // Organize.
+  private readonly aiOff = el('form', 'grove-settings-group')
+  private readonly aiOn = el('div', 'grove-settings-group')
+  private readonly aiAccountInput = input('Cloudflare account ID')
+  private readonly aiTokenInput = input('API token')
+  private readonly aiSave = el('button', 'grove-settings-button primary', 'Save')
+  private readonly aiAccount = el('span', 'grove-settings-value')
+  private readonly aiError = el('div', 'grove-settings-error')
+  private readonly autoOrganize = toggle()
   // General.
   private readonly resume = toggle()
-  private readonly autoOrganize = toggle()
   private readonly unloadAfter = select(UNLOAD_CHOICES.map((m) => [String(m), m ? duration(m) : 'Never']))
 
   constructor(onClose: () => void) {
@@ -142,20 +153,73 @@ class SettingsView {
       if (code) send({ type: 'syncJoin', code })
     })
     const setup = el('form', 'grove-settings-inline')
-    setup.append(this.serverInput, this.setupButton)
+    setup.append(this.inviteInput, this.setupButton)
+    const ownServer = el('div', 'grove-settings-inline')
+    ownServer.append(this.serverInput)
+    const startSync = () => {
+      const invite = this.inviteInput.value.trim()
+      const server = this.serverInput.value.trim()
+      if (invite || server) send({ type: 'syncSetup', server: server || undefined, invite: invite || undefined })
+    }
     setup.addEventListener('submit', (e) => {
       e.preventDefault()
-      const server = this.serverInput.value.trim()
-      if (server) send({ type: 'syncSetup', server })
+      startSync()
+    })
+    this.serverInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') startSync()
     })
     this.offPart.append(
       intro,
       el('span', 'grove-settings-label', 'Join your other devices'),
       join,
-      el('span', 'grove-settings-label', 'Or start syncing on your own sync server'),
-      setup
+      el('span', 'grove-settings-label', 'Or start syncing'),
+      el(
+        'span',
+        'grove-settings-hint',
+        'Grove’s sync server takes new accounts by invite. Running your own (sync-worker/ in Grove’s source)? Give its address, and an invite if it asks for one.'
+      ),
+      setup,
+      ownServer
     )
     sync.append(this.onPart, this.offPart, this.error)
+
+    // ---- Organize ----
+    const organize = section('Organize')
+    this.aiTokenInput.type = 'password'
+    const aiAccountRow = el('div', 'grove-settings-inline')
+    aiAccountRow.append(this.aiAccountInput)
+    const aiTokenRow = el('div', 'grove-settings-inline')
+    aiTokenRow.append(this.aiTokenInput, this.aiSave)
+    this.aiOff.append(
+      el(
+        'p',
+        'grove-settings-hint',
+        'Organize sorts loose tabs into folders with Cloudflare Workers AI, on your own Cloudflare account and bill. Give it an account ID and an API token with the Workers AI permission. The titles and addresses (without queries) of the tabs it sorts go to Cloudflare; the token stays on this device.'
+      ),
+      aiAccountRow,
+      aiTokenRow
+    )
+    this.aiOff.addEventListener('submit', (e) => {
+      e.preventDefault()
+      const accountId = this.aiAccountInput.value.trim()
+      const token = this.aiTokenInput.value.trim()
+      if (accountId && token) send({ type: 'setWorkersAi', accountId, token })
+    })
+    const remove = el('button', 'grove-settings-button danger', 'Remove key')
+    remove.addEventListener('click', () => send({ type: 'clearWorkersAi' }))
+    const removeRow = el('div', 'grove-settings-row end')
+    removeRow.append(remove)
+    this.aiOn.append(
+      row('Workers AI account', this.aiAccount),
+      toggleRow(
+        'Organize tabs automatically',
+        "Sort new tabs into folders when you step away, the same as the Organize button, and file a page you open in a new tab once it loads. Those tabs' titles and addresses go to Cloudflare.",
+        this.autoOrganize,
+        (on) => this.set({ autoOrganize: on })
+      ),
+      removeRow
+    )
+    organize.append(this.aiOff, this.aiOn, this.aiError)
 
     // ---- General ----
     const general = section('General')
@@ -171,16 +235,10 @@ class SettingsView {
         "Close the page of a tab you haven't looked at for this long, to free memory. Selecting it opens it again as it was. Tabs playing sound or holding something you typed stay.",
         this.unloadAfter,
         (v) => this.set({ unloadAfter: Number(v) })
-      ),
-      toggleRow(
-        'Organize tabs automatically',
-        "Sort new tabs into folders when you step away, the same as the Organize button, and file a page you open in a new tab once it loads. Uses your sync server, which sees those tabs' titles and addresses.",
-        this.autoOrganize,
-        (on) => this.set({ autoOrganize: on })
       )
     )
 
-    this.card.append(head, sync, general)
+    this.card.append(head, sync, organize, general)
     // Keep "Synced 2 minutes ago" current.
     this.timer = setInterval(() => this.paint(), 20_000)
   }
@@ -216,8 +274,16 @@ class SettingsView {
       : ''
     this.syncTabs.checked = s.settings.syncTabs === 'all'
     this.resume.checked = s.settings.resume
+    const ai = s.workersAi
+    this.aiOff.hidden = !!ai.accountId
+    this.aiOn.hidden = !ai.accountId
+    this.aiAccount.textContent = ai.accountId ? `${ai.accountId.slice(0, 6)}…${ai.accountId.slice(-4)}` : ''
+    this.aiSave.disabled = !!ai.busy
+    this.aiSave.textContent = ai.busy ? 'Checking…' : 'Save'
+    this.aiError.textContent = ai.error ?? ''
+    this.aiError.hidden = !ai.error
+    if (ai.accountId) this.aiAccountInput.value = this.aiTokenInput.value = ''
     this.autoOrganize.checked = s.settings.autoOrganize
-    this.autoOrganize.disabled = !on
     this.unloadAfter.value = String(s.settings.unloadAfter)
     this.code.textContent = sync.code ? (this.showCode ? sync.code : '•'.repeat(32)) : ''
     this.code.classList.toggle('masked', !this.showCode)
@@ -228,7 +294,7 @@ class SettingsView {
     this.setupButton.textContent = sync.busy === 'setup' ? 'Setting up…' : 'Set up'
     this.error.textContent = sync.error ?? ''
     this.error.hidden = !sync.error
-    if (on) this.joinInput.value = ''
+    if (on) this.joinInput.value = this.inviteInput.value = this.serverInput.value = ''
   }
 }
 

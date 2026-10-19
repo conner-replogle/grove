@@ -1,16 +1,11 @@
-// Organize as the host does it: asks the sync server to sort a workspace's
-// loose tabs (unpinned, in no folder) into folders, and files them.
+// Organize as the host does it: asks Workers AI, on the user's own key
+// (organize-ai.ts, workers-ai.ts), to sort a workspace's loose tabs
+// (unpinned, in no folder) into folders, and files them.
 // See shared/organize-protocol.ts.
 import type { OrganizeRequest, OrganizeResponse } from '../shared/organize-protocol.ts'
 import { ORGANIZE_MAX_FOLDERS, ORGANIZE_MAX_TABS } from '../shared/organize-protocol.ts'
 import type { Entry, Workspace } from '../shared/types.ts'
 import * as M from './model.ts'
-
-export interface OrganizeAuth {
-  server: string
-  account: string
-  token: string
-}
 
 export interface Prepared {
   request: OrganizeRequest
@@ -52,18 +47,7 @@ export function prepare(ws: Workspace, tabs: Entry[]): Prepared {
   return { request: { folders, tabs: sent }, ids }
 }
 
-export async function requestOrganize(auth: OrganizeAuth, request: OrganizeRequest, timeoutMs = 30_000): Promise<OrganizeResponse> {
-  const res = await fetch(`${auth.server.replace(/\/+$/, '')}/v1/${auth.account}/organize`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-    signal: AbortSignal.timeout(timeoutMs)
-  })
-  if (!res.ok) throw new Error(`organize: ${res.status} ${(await res.text()).trim()}`)
-  return (await res.json()) as OrganizeResponse
-}
-
-// Files the tabs as the server said, into the workspace as it is now: tabs
+// Files the tabs as the models said, into the workspace as it is now: tabs
 // closed, pinned or filed meanwhile stay where they are, and so do tabs
 // for a folder that's gone. A new folder needs two tabs still loose.
 export function applyOrganize(ws: Workspace, answer: OrganizeResponse, ids: Map<string, string>): Workspace {

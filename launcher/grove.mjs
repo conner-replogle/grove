@@ -33,6 +33,7 @@ import { Store } from '../host/store.ts'
 import { Settings } from '../host/settings.ts'
 import { SyncManager } from '../host/sync/manager.ts'
 import { Updater } from '../host/updates.ts'
+import { WorkersAiKeys } from '../host/workers-ai.ts'
 import { UI_BINDING, UI_RECEIVER } from '../shared/protocol.ts'
 import { PipeCDP } from './cdp.mjs'
 
@@ -240,6 +241,8 @@ const sync = new SyncManager({
 })
 host.settings = settings
 host.sync = sync
+// Organize's Workers AI key, given in the settings.
+host.workersAi = new WorkersAiKeys(PROFILE, () => host.refresh())
 
 // Newer releases (host/updates.ts), offered in the windows.
 const updater = new Updater({

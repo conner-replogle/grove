@@ -1,10 +1,9 @@
-// Organize: the sync server sorts a workspace's loose tabs into folders.
-// Unlike sync, this is NOT end-to-end encrypted: the tabs' titles and URLs
-// (no query or fragment) reach the server, which asks Workers AI.
-//
-// POST <server>/v1/<account>/organize with `Authorization: Bearer <token>`
-// (the account's sync token) and an OrganizeRequest. Ids are the caller's
-// own, short ones read better to the models.
+// Organize: Workers AI sorts a workspace's loose tabs into folders, on the
+// user's own Cloudflare account (host/workers-ai.ts). It's off until they
+// give Grove a Workers AI key. Unlike sync, this is NOT end-to-end
+// encrypted: the tabs' titles and URLs (no query or fragment) go to
+// Cloudflare. Ids are the caller's own; short ones read better to the
+// models.
 
 export interface OrganizeRequest {
   // The workspace's folders, each with a few of its tabs' titles.
