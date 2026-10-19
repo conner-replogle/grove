@@ -1,0 +1,61 @@
+#!/bin/sh
+# Starts an installed Grove (a bundle from scripts/bundle.mjs):
+#
+#   <bundle>/chromium/   the pinned Chromium
+#   <bundle>/node/       the pinned Node
+#   <bundle>/app/        Grove itself, as shipped with this bundle
+#
+# Grove runs from a copy of app/ in the user's data directory, so it can
+# update itself (host/updates.ts) without touching the bundle; a newer
+# bundle's app/ replaces that copy.
+set -eu
+
+self="$(readlink -f "$0")"
+bundle="$(dirname "$self")"
+data="${XDG_DATA_HOME:-$HOME/.local/share}/grove"
+node="$bundle/node/bin/node"
+
+# Whether no process runs this binary (a restart's Chrome takes a moment
+# to go).
+gone() {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -f "$1" >/dev/null 2>&1 || return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+# A full update (host/updates.ts) leaves the new bundle beside this one as
+# <bundle>.new. Swap it in once nothing runs from this bundle, then start it.
+if [ -f "$bundle.new/bundle.json" ] && gone "$bundle/chromium/chrome "; then
+  rm -rf "$bundle.old"
+  mv "$bundle" "$bundle.old" && mv "$bundle.new" "$bundle" && rm -rf "$bundle.old"
+  exec "$bundle/grove" "$@"
+fi
+
+version() { "$node" -p "try { require('$1/package.json').version } catch { '0.0.0' }"; }
+newer() {
+  "$node" -e '
+    const p = (v) => v.split(/[-+]/)[0].split(".").map(Number)
+    const [a, b] = [p(process.argv[1]), p(process.argv[2])]
+    process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) > 0 ? 0 : 1)' "$1" "$2"
+}
+
+mkdir -p "$data"
+if [ ! -f "$data/app/launcher/grove.mjs" ] || newer "$(version "$bundle/app")" "$(version "$data/app")"; then
+  rm -rf "$data/app.new"
+  cp -R "$bundle/app" "$data/app.new"
+  echo "bundle $(version "$bundle/app")" > "$data/app.new/.installed"
+  rm -rf "$data/app.old"
+  [ -d "$data/app" ] && mv "$data/app" "$data/app.old"
+  mv "$data/app.new" "$data/app"
+fi
+
+export GROVE_CHROME="${GROVE_CHROME:-$bundle/chromium/chrome}"
+export GROVE_BUNDLE="$bundle"
+export GROVE_RELAUNCH="$self"
+
+if [ "${1:-}" = sync ]; then exec "$node" "$data/app/launcher/grove.mjs" "$@"; fi
+log="${XDG_CACHE_HOME:-$HOME/.cache}/grove/grove.log"
+mkdir -p "$(dirname "$log")"
+exec "$node" "$data/app/launcher/grove.mjs" "$@" >>"$log" 2>&1

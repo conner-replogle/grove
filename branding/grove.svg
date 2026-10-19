@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Grove's placeholder mark: three trees on a green tile, inside
+       macOS's icon margin (824 of 1024). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3f8a5c"/>
+      <stop offset="1" stop-color="#1b412c"/>
+    </linearGradient>
+    <linearGradient id="crown" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d4f5dc"/>
+      <stop offset="1" stop-color="#86d09c"/>
+    </linearGradient>
+    <!-- A crown: a leaf, pointed at the top, 1 unit = 1 px at scale 1. -->
+    <path id="leaf" d="M0 -190 C 120 -110 150 0 112 78 C 84 136 -84 136 -112 78 C -150 0 -120 -110 0 -190 Z"/>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>
+  <g stroke-linecap="round" stroke="#d4f5dc">
+    <g opacity="0.6">
+      <line x1="338" y1="560" x2="338" y2="760" stroke-width="30"/>
+      <use href="#leaf" transform="translate(338 520) scale(0.78)" fill="url(#crown)" stroke="none"/>
+      <line x1="686" y1="560" x2="686" y2="760" stroke-width="30"/>
+      <use href="#leaf" transform="translate(686 520) scale(0.78)" fill="url(#crown)" stroke="none"/>
+    </g>
+    <line x1="512" y1="500" x2="512" y2="770" stroke-width="40"/>
+    <use href="#leaf" transform="translate(512 430)" fill="#1b412c" stroke="none" opacity="0.55" x="0" y="14"/>
+    <use href="#leaf" transform="translate(512 430)" fill="url(#crown)" stroke="none"/>
+    <line x1="262" y1="776" x2="762" y2="776" stroke-width="28" opacity="0.85"/>
+  </g>
+</svg>

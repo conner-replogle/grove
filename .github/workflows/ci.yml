@@ -1,0 +1,22 @@
+# Typechecks and tests every push and pull request.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm exec vitest run
+      - run: node build.mjs
+      - name: Sync server
+        working-directory: sync-worker
+        run: pnpm install --frozen-lockfile && pnpm exec tsc --noEmit
