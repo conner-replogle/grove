@@ -27,7 +27,7 @@
 // An installed bundle's start script (packaging/) also sets GROVE_BUNDLE,
 // the bundle the updater may replace, and GROVE_RELAUNCH, what restarts it.
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -137,8 +137,26 @@ function prepareProfile() {
   }
   prefs.session = { ...prefs.session, restore_on_startup: 1 }
   prefs.profile = { ...prefs.profile, exit_type: 'Normal', exited_cleanly: true }
+  // Google searches what's typed in the URL bar until the user picks
+  // another engine (Chrome then keeps their choice here). ungoogled-chromium
+  // starts with none, and its own Google entry points at dead addresses.
+  if (!prefs.default_search_provider_data?.template_url_data) {
+    prefs.default_search_provider_data = { ...prefs.default_search_provider_data, template_url_data: GOOGLE_SEARCH() }
+  }
   writeFileSync(file, JSON.stringify(prefs))
 }
+
+const GOOGLE_SEARCH = () => ({
+  short_name: 'Google',
+  keyword: 'google.com',
+  url: 'https://www.google.com/search?q={searchTerms}&ie={inputEncoding}',
+  suggestions_url: 'https://www.google.com/complete/search?client=chrome&q={searchTerms}',
+  favicon_url: 'https://www.google.com/favicon.ico',
+  input_encodings: ['UTF-8'],
+  safe_for_autoreplace: false,
+  prepopulate_id: 0,
+  synced_guid: randomUUID()
+})
 prepareProfile()
 const EXTENSION = prepareBridge()
 
