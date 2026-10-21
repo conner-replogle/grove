@@ -105,6 +105,23 @@ export interface WorkersAiStatus {
   error?: string
 }
 
+// A Web Store extension, as the window on its store page offers it
+// (host/extensions.ts). 'available': Add to Grove; 'checking': downloading
+// and checking it; 'confirm': waiting for the user; 'installing';
+// 'installed' (managed: by Grove, so it can remove it); 'removed' (off now,
+// uninstalled at Chrome's next start); 'error'.
+export interface StoreOffer {
+  id: string
+  state: 'available' | 'checking' | 'confirm' | 'installing' | 'installed' | 'removed' | 'error'
+  name?: string
+  version?: string
+  // What Chrome warns it can do, and its icon (a data: URL).
+  warnings?: string[]
+  icon?: string
+  managed?: boolean
+  error?: string
+}
+
 // A download, as the sidebar's downloads panel shows it (newest first).
 export interface DownloadView {
   id: number
@@ -164,6 +181,8 @@ export interface WindowState {
   // Workers AI key), under way, and the last failure.
   organize: { available: boolean; busy: boolean; error?: string }
   workersAi: WorkersAiStatus
+  // The window shows a Web Store extension's page.
+  store?: StoreOffer
   update?: UpdateStatus
 }
 
@@ -220,6 +239,12 @@ export type HostCommand =
   // Organize's Workers AI key: a Cloudflare account id and API token.
   | { type: 'setWorkersAi'; accountId: string; token: string }
   | { type: 'clearWorkersAi' }
+  // Web Store extensions: download and check one (then the user confirms),
+  // install it, drop the offer, or remove one Grove installed.
+  | { type: 'storeInspect'; id: string }
+  | { type: 'storeInstall'; id: string }
+  | { type: 'storeCancel'; id: string }
+  | { type: 'storeRemove'; id: string }
   | { type: 'download'; id: number; action: DownloadAction }
   // Takes finished and failed downloads off the list (the files stay).
   | { type: 'clearDownloads' }

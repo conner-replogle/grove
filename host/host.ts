@@ -7,13 +7,14 @@
 // is instant; the idle sweep (unloadIdle) frees pages no window has shown
 // for a while. (Decision 2 had workspaces no window shows keep no pages,
 // which made every return to a workspace reload its tabs from scratch.)
-import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type UpdateStatus, type WindowState, type WorkersAiStatus } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type StoreOffer, type UpdateStatus, type WindowState, type WorkersAiStatus } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import * as M from './model.ts'
 import { leaves } from './split.ts'
 import { applyOrganize, looseTabs, prepare, sendableUrl } from './organize.ts'
 import { organize as runOrganize, type AiRunner } from './organize-ai.ts'
+import { storeExtensionId } from './webstore.ts'
 import type { Settings } from './settings.ts'
 import { keptByHost, type SitePermissions } from './site-permissions.ts'
 import type { Store } from './store.ts'
@@ -48,6 +49,7 @@ export type BridgeEvent =
   | { type: 'idle'; state: 'active' | 'idle' | 'locked' }
   | { type: 'tabPainted'; tabId: number }
   | { type: 'historyVisited'; item: HistoryItem }
+  | { type: 'extensionUninstalled'; id: string }
   | { type: 'historyRemoved'; all: boolean; urls: string[] }
 
 export interface Bridge {
@@ -80,6 +82,16 @@ export interface SyncControl {
   join(code: string): Promise<void>
   off(): void
   setScope(scope: { unpinnedTabs: boolean }): void
+}
+
+// Web Store extensions Grove installs (host/extensions.ts).
+export interface ExtensionsControl {
+  status(id: string): StoreOffer
+  inspect(id: string): Promise<void>
+  install(id: string): Promise<void>
+  cancel(id: string): void
+  remove(id: string): Promise<void>
+  forget(id: string): void
 }
 
 // Organize's Workers AI key, as the settings page drives it (host/workers-ai.ts).
@@ -172,6 +184,7 @@ export class GroveHost {
   settings?: Settings
   sync?: SyncControl
   workersAi?: WorkersAiControl
+  extensions?: ExtensionsControl
   updates?: UpdateControl
   // Quits Grove and starts it again (the launcher's).
   restart?: () => void
@@ -289,6 +302,8 @@ export class GroveHost {
         if (!this.tabWindow.has(e.tabId) || this.painted.has(e.tabId)) return
         this.painted.add(e.tabId)
         return this.queuePush()
+      case 'extensionUninstalled':
+        return this.extensions?.forget(e.id)
       case 'historyVisited':
         return this.history.visit(e.item)
       case 'historyRemoved':
@@ -619,6 +634,14 @@ export class GroveHost {
         return this.workersAi?.set(c.accountId, c.token)
       case 'clearWorkersAi':
         return this.workersAi?.clear()
+      case 'storeInspect':
+        return this.extensions?.inspect(c.id)
+      case 'storeInstall':
+        return this.extensions?.install(c.id)
+      case 'storeCancel':
+        return this.extensions?.cancel(c.id)
+      case 'storeRemove':
+        return this.extensions?.remove(c.id)
       case 'download':
         return void (await this.bridge?.call('downloadAction', { id: c.id, action: c.action }).catch((e: unknown) => this.log('download', e)))
       case 'clearDownloads':
@@ -1268,6 +1291,13 @@ export class GroveHost {
     return u
   }
 
+  // The Web Store extension the window's page is about.
+  private storeIn(b: Binding): StoreOffer | undefined {
+    const url = b.activeEntryId ? this.entry(b.activeEntryId)?.url : undefined
+    const id = url ? storeExtensionId(url) : undefined
+    return id && this.extensions ? this.extensions.status(id) : undefined
+  }
+
   private pausedIn(windowId: number, b: Binding): WindowState['paused'] {
     const entryId = b.activeEntryId
     const tabId = entryId ? this.tabOf.get(entryId) : undefined
@@ -1338,6 +1368,7 @@ export class GroveHost {
       downloads: this.downloads,
       organize: { available: !!this.workersAi?.status().accountId, busy: this.organizing.has(ws.id), error: this.organizeError },
       workersAi: this.workersAi?.status() ?? {},
+      store: this.storeIn(b),
       update: this.updateOffer()
     }
   }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Grove bridge",
-  "description": "Lets Grove's host move and manage tabs across windows, see downloads, and ask for sites' permissions. Loaded by the Grove launcher.",
+  "description": "Lets Grove's host move and manage tabs across windows, see downloads, ask for sites' permissions and install extensions from the Web Store. Loaded by the Grove launcher.",
   "version": "0.1.0",
   "permissions": [
     "tabs",
@@ -10,7 +10,8 @@
     "downloads.open",
     "sessions",
     "idle",
-    "history"
+    "history",
+    "management"
   ],
   "host_permissions": [
     "<all_urls>"

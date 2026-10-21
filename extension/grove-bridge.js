@@ -233,6 +233,10 @@ const historyItem = (h) => ({
   lastVisitTime: h.lastVisitTime || 0
 })
 chrome.history.onVisited.addListener((h) => emit({ type: 'historyVisited', item: historyItem(h) }))
+
+// An extension removed (chrome://extensions): Grove stops loading it if it
+// installed it from the Web Store.
+chrome.management.onUninstalled.addListener((id) => emit({ type: 'extensionUninstalled', id }))
 chrome.history.onVisitRemoved.addListener(({ allHistory, urls }) =>
   emit({ type: 'historyRemoved', all: allHistory, urls: urls || [] })
 )
@@ -270,6 +274,20 @@ globalThis.grove = {
   },
   async forgetUrl(url) {
     await chrome.history.deleteUrl({ url })
+  },
+  // What Chrome would warn an extension with this manifest can do.
+  async permissionWarnings(manifest) {
+    return chrome.management.getPermissionWarningsByManifest(manifest)
+  },
+  // Turns an extension off (Grove removing one it installed: Chrome drops
+  // it for good at its next start).
+  async disableExtension(id) {
+    await chrome.management.setEnabled(id, false)
+  },
+  // Whether an extension is installed (by Grove or otherwise), and how.
+  async extension(id) {
+    const e = await chrome.management.get(id).catch(() => undefined)
+    return e ? { installType: e.installType, version: e.version, enabled: e.enabled } : null
   },
   async navigate({ tabId, url }) {
     return tabInfo(await chrome.tabs.update(tabId, { url, active: true }))

@@ -460,6 +460,85 @@ webui-browser-bookmark-bar { display: none !important; }
 }
 .grove-permission-allow:hover { filter: brightness(1.08); }
 
+/* ---- Add to Grove on a Web Store extension page (webstore.ts) ---- */
+
+.grove-store-pill,
+.grove-store-card {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 60;
+  color: light-dark(#1f1f1f, #eeeeee);
+  background: light-dark(#ffffff, #242424);
+  border: 1px solid var(--divider-color);
+  box-shadow: var(--zen-big-shadow);
+  font-size: 13px;
+  animation: grove-permission-in 120ms ease-out;
+}
+.grove-store-pill {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+}
+.grove-store-pill button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.grove-store-main {
+  color: white;
+  background: var(--zen-primary-color);
+}
+.grove-store-main:hover:not(:disabled) { filter: brightness(1.08); }
+.grove-store-main:disabled { cursor: default; }
+.grove-store-main.busy { opacity: 0.75; }
+.grove-store-pill .grove-store-main:disabled:not(.busy) {
+  color: var(--zen-primary-color);
+  background: color-mix(in srgb, var(--zen-primary-color) 14%, transparent);
+}
+.grove-store-remove { color: inherit; background: transparent; }
+.grove-store-remove:hover { background: var(--zen-toolbar-element-bg-hover); }
+.grove-store-card {
+  width: 320px;
+  padding: 14px;
+  border-radius: 12px;
+}
+.grove-store-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.grove-store-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--zen-primary-color);
+}
+.grove-store-title { font-weight: 600; font-size: 14px; }
+.grove-store-can { margin-bottom: 6px; opacity: 0.8; }
+.grove-store-list { margin: 0 0 14px; padding-left: 18px; display: grid; gap: 4px; }
+.grove-store-error { margin: 6px 0 14px; opacity: 0.8; overflow-wrap: anywhere; }
+.grove-store-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.grove-store-buttons button {
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.grove-store-buttons .quiet { color: inherit; background: var(--zen-toolbar-element-bg); }
+.grove-store-buttons .quiet:hover { background: var(--zen-toolbar-element-bg-hover); }
+.grove-store-buttons .primary { color: white; background: var(--zen-primary-color); }
+.grove-store-buttons .primary:hover { filter: brightness(1.08); }
+
 /* ---- A page that hasn't drawn yet (loading-cover.ts) ---- */
 
 /* Over the page's empty surface (which nothing behind it shows through),

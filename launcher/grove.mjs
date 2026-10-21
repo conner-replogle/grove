@@ -39,6 +39,7 @@ import { Settings } from '../host/settings.ts'
 import { SyncManager } from '../host/sync/manager.ts'
 import { Updater } from '../host/updates.ts'
 import { WorkersAiKeys } from '../host/workers-ai.ts'
+import { StoreExtensions } from '../host/extensions.ts'
 import { UI_BINDING, UI_RECEIVER } from '../shared/protocol.ts'
 import { PipeCDP } from './cdp.mjs'
 
@@ -299,6 +300,30 @@ host.settings = settings
 host.sync = sync
 // Organize's Workers AI key, given in the settings.
 host.workersAi = new WorkersAiKeys(PROFILE, () => host.refresh())
+
+// Web Store extensions: Grove installs them itself (host/extensions.ts).
+let chromeVersion = '155.0.0.0'
+cdp
+  .send('Browser.getVersion')
+  .then(({ product }) => (chromeVersion = product.split('/')[1] ?? chromeVersion))
+  .catch(() => {})
+const extensions = new StoreExtensions({
+  profile: PROFILE,
+  chromeVersion: () => chromeVersion,
+  load: async (dir) => (await cdp.send('Extensions.loadUnpacked', { path: dir })).id,
+  // The copy loaded this session goes at once; an installed one is off
+  // until Chrome uninstalls it at its next start.
+  unload: (id) => cdp.send('Extensions.uninstall', { id }).catch(() => bridge.call('disableExtension', id)),
+  warnings: (manifest) => bridge.call('permissionWarnings', manifest),
+  installedElsewhere: async (id) => {
+    const e = await bridge.call('extension', id)
+    return !!e && e.installType !== 'development'
+  },
+  onChange: () => host.refresh(),
+  log: (...a) => console.log('[grove]', ...a)
+})
+host.extensions = extensions
+extensions.start()
 
 // Newer releases (host/updates.ts), offered in the windows.
 const updater = new Updater({
