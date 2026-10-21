@@ -17,10 +17,11 @@
 // plutil, codesign). Downloads are cached in ~/.cache/grove-bundle.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { holdWebiumUi } from './webium-pak.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const PLATFORMS = ['linux-x64', 'linux-arm64', 'macos-arm64', 'macos-x64']
@@ -91,6 +92,8 @@ if (!mac) {
   const dir = join(stage, 'grove')
   mkdirSync(join(dir, 'chromium'), { recursive: true })
   run('tar', ['-xJf', chromium, '-C', join(dir, 'chromium'), '--strip-components=1'])
+  // No flash of Webium's own UI in new windows (webium-pak.mjs).
+  holdWebiumUi(join(dir, 'chromium/resources.pak'))
   unpackNode(join(dir, 'node'))
   copyApp(join(dir, 'app'))
   cpSync(join(root, 'packaging/linux/grove'), join(dir, 'grove'))
@@ -111,6 +114,11 @@ if (!mac) {
     run('hdiutil', ['detach', mount])
   }
   const app = join(stage, 'Grove.app/Contents')
+  // No flash of Webium's own UI in new windows (webium-pak.mjs). Before
+  // signing: this edits the framework's resources.
+  const versions = join(app, 'Frameworks/Chromium Framework.framework/Versions')
+  const framework = readdirSync(versions).find((v) => v !== 'Current')
+  holdWebiumUi(join(versions, framework, 'Resources/resources.pak'))
   const plist = join(app, 'Info.plist')
   const set = (key, value) => run('plutil', ['-replace', key, '-string', value, plist])
   set('CFBundleName', 'Grove')

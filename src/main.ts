@@ -116,6 +116,9 @@ function keepSidebarMounted(): void {
     }
     const root = document.querySelector('webui-browser-app')!.shadowRoot!
     new MutationObserver(() => mount()).observe(root, { childList: true, subtree: true })
+    // Grove's bundled Chromium keeps Webium's app hidden until this
+    // (scripts/webium-pak.mjs), so its own UI never shows first.
+    document.documentElement.classList.add('grove')
   }
   wait()
 }
