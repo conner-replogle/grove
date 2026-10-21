@@ -19,6 +19,10 @@ pnpm start          # the same without watching
 Chromium 152 or later with Webium works, e.g. ungoogled-chromium, but not the
 Grove Chromium fork, whose own workspace service fights this one) and
 `GROVE_PROFILE` the profile (default `~/.config/grove-webium`).
+Extra Chrome flags go in `~/.config/grove-flags.conf`, one or more to a
+line, like Arch's `chromium-flags.conf` (Grove's bundled Chromium doesn't
+read that one), e.g. `--password-store=gnome-libsecret` on a desktop
+where Chrome can't tell which keyring to use.
 
 ## Installing
 

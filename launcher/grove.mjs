@@ -142,9 +142,40 @@ function prepareProfile() {
 prepareProfile()
 const EXTENSION = prepareBridge()
 
+// The user's own Chrome flags, one or more to a line (# comments), from
+// $XDG_CONFIG_HOME/grove-flags.conf, as Arch's chromium reads
+// chromium-flags.conf: --password-store=gnome-libsecret, say, where
+// Chrome can't tell which keyring the desktop has.
+function userFlags() {
+  try {
+    const file = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'grove-flags.conf')
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .map((l) => l.replace(/#.*/, '').trim())
+      .flatMap((l) => (l ? l.split(/\s+/) : []))
+  } catch {
+    return []
+  }
+}
+
+// Chrome keeps only the last of a repeated switch; these lists are merged
+// instead, so the user's features and extensions join Grove's.
+function mergeFlags(flags) {
+  const lists = new Map([['--enable-features', []], ['--disable-features', []], ['--load-extension', []]])
+  const rest = []
+  for (const f of flags) {
+    const [name, value] = f.split(/=(.*)/s)
+    if (lists.has(name) && value) lists.get(name).push(...value.split(','))
+    else rest.push(f)
+  }
+  for (const [name, values] of lists) if (values.length) rest.push(`${name}=${[...new Set(values)].join(',')}`)
+  return rest
+}
+
 const chrome = spawn(
   CHROME,
-  [
+  mergeFlags([
+    ...userFlags(),
     `--user-data-dir=${PROFILE}`,
     `--enable-features=${FEATURES}`,
     `--load-extension=${EXTENSION}`,
@@ -158,7 +189,7 @@ const chrome = spawn(
     // it. Grove is a person's browser, not automation.
     '--disable-blink-features=AutomationControlled',
     ...passArgs
-  ],
+  ]),
   { stdio: ['ignore', 'ignore', dev ? 'inherit' : 'ignore', 'pipe', 'pipe'] }
 )
 // Set when Grove quits to restart (into an update): the launcher starts a
