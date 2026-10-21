@@ -626,7 +626,8 @@ export class GroveHost {
       case 'claimKeyboard':
         return this.ui.click(windowId, c.x, c.y)
       case 'suggest':
-        return this.ui.suggestions(windowId, c.input, this.history.suggest(c.input))
+        // An empty URL bar gets the most frecent pages.
+        return this.ui.suggestions(windowId, c.input, c.input.trim() ? this.history.suggest(c.input) : this.history.recent())
       case 'open':
         return this.open(windowId, c.url, c.newTab)
       case 'forgetUrl':

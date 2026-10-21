@@ -85,3 +85,19 @@ describe('HistoryIndex.suggest', () => {
     expect(i.suggest('watch.', now)[0]?.text).not.toBe('watch.example.dev')
   })
 })
+
+describe('HistoryIndex.recent', () => {
+  it('suggests the most frecent pages for an empty URL bar, one row an address', () => {
+    const rows = index().recent(now, 3)
+    expect(rows.map((r) => r.url)).toEqual([
+      'https://watch.example.dev/web/#/video',
+      // Typed visits count for more.
+      'https://watch.example.dev/',
+      'https://watch.example.dev/web/#/home'
+    ])
+    expect(rows.every((r) => !r.autofill)).toBe(true)
+    // http:// and https:// of the root page are one row, the https one.
+    const all = index().recent(now, 20)
+    expect(all.filter((r) => /^https?:\/\/watch\.example\.dev\/$/.test(r.url)).map((r) => r.url)).toEqual(['https://watch.example.dev/'])
+  })
+})

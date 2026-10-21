@@ -10,6 +10,7 @@
 // or forget Grove's own matches through the host.
 import type { HistorySuggestion } from '../shared/protocol.ts'
 import { onSuggestions, send } from './host-client'
+import { patchMethod } from './patch'
 import { enterAlsoWaitsFor, isNewTabSearch, searchbox } from './urlbar'
 
 // A match as Webium's searchbox reads it (searchbox.mojom AutocompleteMatch).
@@ -38,6 +39,7 @@ const MAX_MATCHES = 10
 const wired = new WeakSet<Element>()
 
 export function suggestFromHistory(): void {
+  suggestWhenEmptied()
   let latest: { input: string; list: HistorySuggestion[] } | undefined
   let box: Box | undefined
   let chromeResult: Result | null = null
@@ -83,14 +85,10 @@ export function suggestFromHistory(): void {
         for (const id of fillable.keys()) if (id < queryId - 20) fillable.delete(id)
       })
     el.addEventListener('query-autocomplete', (e) => {
+      // An empty box too: the host answers with the most frecent pages.
       const input = (e as CustomEvent<{ inputValue: string }>).detail?.inputValue ?? ''
-      if (input.trim()) {
-        asked = input
-        send({ type: 'suggest', input })
-      } else {
-        asked = undefined
-        latest = undefined
-      }
+      asked = input
+      send({ type: 'suggest', input })
     })
   }
 
@@ -117,6 +115,25 @@ export function suggestFromHistory(): void {
     if (!box) requestAnimationFrame(tryWire)
   }
   tryWire()
+}
+
+// Chrome's searchbox drops its suggestions once what was typed is deleted,
+// and asks for the empty box's (recent and frequent pages) only when the
+// field gains focus. Asked again whenever the text goes empty, they come
+// back: an empty URL bar always shows them.
+function suggestWhenEmptied(): void {
+  interface Searchbox extends HTMLElement {
+    queryAutocomplete(input: string, preventInline: boolean, isOnFocus: boolean): void
+    keywordModeManager_?: { isInKeywordMode?: boolean }
+  }
+  patchMethod<[CustomEvent<{ value: string }>], void, Searchbox>(
+    'webui-browser-searchbox',
+    'onSearchboxInputTextUpdated',
+    function (original, e) {
+      original(e)
+      if (!e.detail?.value?.trim() && !this.keywordModeManager_?.isInKeywordMode) this.queryAutocomplete('', false, true)
+    }
+  )
 }
 
 function merge(

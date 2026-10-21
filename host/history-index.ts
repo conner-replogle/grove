@@ -145,6 +145,22 @@ export class HistoryIndex {
     return out
   }
 
+  // What an empty URL bar suggests: the most frecent pages, one row per
+  // address as shown (the https copy of a page wins).
+  recent(now = Date.now(), max = 6): HistorySuggestion[] {
+    const rows = new Map<string, { p: Page; score: number }>()
+    for (const p of this.pages.values()) {
+      const score = frecency(p, now)
+      const row = rows.get(p.bare)
+      if (!row) rows.set(p.bare, { p, score })
+      else rows.set(p.bare, { p: row.p.scheme === 'https:' ? row.p : p, score: Math.max(row.score, score) })
+    }
+    return [...rows.values()]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, max)
+      .map(({ p }) => ({ url: p.url, title: p.title, text: p.bare, autofill: false }))
+  }
+
   // The site to fill in, if the input starts a site's address the user
   // goes to (Firefox's origin autofill). Typed past the host ("site.com/pa"),
   // it fills in the most frecent page under it.
