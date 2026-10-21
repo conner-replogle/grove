@@ -313,7 +313,10 @@ host.workersAi = new WorkersAiKeys(PROFILE, () => host.refresh())
 let chromeVersion = '155.0.0.0'
 cdp
   .send('Browser.getVersion')
-  .then(({ product }) => (chromeVersion = product.split('/')[1] ?? chromeVersion))
+  .then(({ product }) => {
+    chromeVersion = product.split('/')[1] ?? chromeVersion
+    host.refresh()
+  })
   .catch(() => {})
 const extensions = new StoreExtensions({
   profile: PROFILE,
@@ -331,6 +334,7 @@ const extensions = new StoreExtensions({
   log: (...a) => console.log('[grove]', ...a)
 })
 host.extensions = extensions
+host.chromeVersion = () => chromeVersion
 extensions.start()
 
 // Spell check dictionaries, which ungoogled-chromium won't download

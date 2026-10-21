@@ -111,6 +111,10 @@ export class Updater {
   private latest?: Release
   private state: UpdateStatus
   private timer?: ReturnType<typeof setInterval>
+  // The last look at GitHub: under way, when it finished, what went wrong.
+  private checking = false
+  private checkedAt?: number
+  private checkError?: string
 
   constructor(o: UpdaterOptions) {
     this.appDir = o.appDir
@@ -126,7 +130,7 @@ export class Updater {
   }
 
   status(): UpdateStatus {
-    return this.state
+    return { ...this.state, checking: this.checking || undefined, checkedAt: this.checkedAt, checkError: this.checkError }
   }
 
   // Checks a minute after launch, then every six hours.
@@ -140,9 +144,12 @@ export class Updater {
   }
 
   async check(): Promise<void> {
-    if (this.state.state === 'downloading' || this.state.state === 'ready') return
+    if (this.checking || this.state.state === 'downloading' || this.state.state === 'ready') return
+    this.checking = true
+    this.onChange()
     try {
       const release = await this.fetchLatest()
+      this.checkError = undefined
       if (!release || compareVersions(release.tag_name, this.current) <= 0) {
         if (this.state.state !== 'none') this.set({ state: 'none' })
         return
@@ -155,8 +162,13 @@ export class Updater {
         url: release.html_url
       })
     } catch (e) {
-      // No network or no token: try again next time, quietly.
-      this.log('update check:', (e as Error).message)
+      // No network: try again next time, quietly (the settings say so).
+      this.checkError = (e as Error).message
+      this.log('update check:', this.checkError)
+    } finally {
+      this.checking = false
+      this.checkedAt = Date.now()
+      this.onChange()
     }
   }
 

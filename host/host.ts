@@ -73,8 +73,10 @@ export interface UiSink {
 
 // Updates as the windows drive them (host/updates.ts).
 export interface UpdateControl {
+  readonly current: string
   status(): UpdateStatus
   install(): Promise<void>
+  check(): Promise<void>
 }
 
 // Sync as the settings page drives it (host/sync/manager.ts).
@@ -189,6 +191,8 @@ export class GroveHost {
   extensions?: ExtensionsControl
   private translation?: PageTranslation
   updates?: UpdateControl
+  // Chrome's version, for the settings' About.
+  chromeVersion?: () => string
   // Quits Grove and starts it again (the launcher's).
   restart?: () => void
   // An update offer the user put away, by version, until the next launch.
@@ -677,6 +681,8 @@ export class GroveHost {
       case 'dismissUpdate':
         this.dismissedUpdate = this.updates?.status().version
         return this.pushAll()
+      case 'checkUpdates':
+        return this.updates?.check()
     }
   }
 
@@ -1390,7 +1396,12 @@ export class GroveHost {
       workersAi: this.workersAi?.status() ?? {},
       store: this.storeIn(b),
       translate: this.translateIn(b),
-      update: this.updateOffer()
+      update: this.updateOffer(),
+      about: {
+        version: this.updates?.current ?? '',
+        chromium: this.chromeVersion?.(),
+        update: this.updates?.status()
+      }
     }
   }
 }

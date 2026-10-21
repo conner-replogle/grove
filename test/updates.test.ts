@@ -118,6 +118,18 @@ describe('Updater', () => {
     expect(readFileSync(join(dir, 'grove-ui/launcher/grove.mjs'), 'utf8')).toBe('// 0.1.0')
   })
 
+  it('says when it last looked, and why it couldn’t', async () => {
+    const u = new Updater({ appDir: app('0.2.0'), repo: 'o/r', api, onChange: () => {} })
+    expect(u.status().checkedAt).toBeUndefined()
+    await u.check()
+    expect(u.status()).toMatchObject({ state: 'none', checkError: undefined })
+    expect(u.status().checkedAt).toBeGreaterThan(0)
+    const offline = new Updater({ appDir: app('0.1.0'), repo: 'o/r', api: 'http://127.0.0.1:9', onChange: () => {} })
+    await offline.check()
+    expect(offline.status().checkError).toBeTruthy()
+    expect(offline.status().checking).toBeUndefined()
+  })
+
   it('refuses a download that differs from SHA256SUMS', async () => {
     files.set(`/${assetName('0.2.0')}`, Buffer.from('tampered'))
     const appDir = app('0.1.0')

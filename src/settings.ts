@@ -1,7 +1,8 @@
 // Grove's settings: a card over the page, opened from the gear at the
 // bottom of the sidebar. Sync (its state, what it syncs, the sync code
 // that joins another device, joining or starting one with an invite,
-// turning it off), Organize (its Workers AI key) and general settings.
+// turning it off), Organize (its Workers AI key), general settings, and
+// About: the versions and Grove's updates.
 // The host keeps them; this only shows and sends.
 import closeSvg from 'lucide-static/icons/x.svg'
 import { UNLOAD_CHOICES, type GroveSettings, type SyncStatus, type WindowState } from '../shared/protocol.ts'
@@ -68,6 +69,11 @@ class SettingsView {
   private readonly aiAccount = el('span', 'grove-settings-value')
   private readonly aiError = el('div', 'grove-settings-error')
   private readonly autoOrganize = toggle()
+  // About.
+  private readonly groveVersion = el('span', 'grove-settings-value')
+  private readonly chromiumVersion = el('span', 'grove-settings-value')
+  private readonly updateText = el('span', 'grove-settings-hint')
+  private readonly updateButton = el('button', 'grove-settings-button')
   // General.
   private readonly resume = toggle()
   private readonly unloadAfter = select(UNLOAD_CHOICES.map((m) => [String(m), m ? duration(m) : 'Never']))
@@ -238,7 +244,21 @@ class SettingsView {
       )
     )
 
-    this.card.append(head, sync, organize, general)
+    // ---- About ----
+    const about = section('About')
+    const updateRow = el('div', 'grove-settings-row')
+    const updateLabel = el('div', 'grove-settings-text')
+    updateLabel.append(el('span', 'grove-settings-label', 'Updates'), this.updateText)
+    updateRow.append(updateLabel, this.updateButton)
+    this.updateButton.addEventListener('click', () => {
+      const u = this.state?.about.update
+      if (u?.state === 'available' || u?.state === 'error') send({ type: 'installUpdate' })
+      else if (u?.state === 'ready') send({ type: 'restartForUpdate' })
+      else send({ type: 'checkUpdates' })
+    })
+    about.append(row('Grove', this.groveVersion), row('Chromium', this.chromiumVersion), updateRow)
+
+    this.card.append(head, sync, organize, general, about)
     // Keep "Synced 2 minutes ago" current.
     this.timer = setInterval(() => this.paint(), 20_000)
   }
@@ -256,6 +276,44 @@ class SettingsView {
 
   private set(settings: Partial<GroveSettings>): void {
     send({ type: 'setSettings', settings })
+  }
+
+  // The About section's update line and its one button: check, update,
+  // restart, or retry, as the state calls for.
+  private paintAbout(s: WindowState): void {
+    const { version, chromium, update: u } = s.about
+    this.groveVersion.textContent = version || '—'
+    this.chromiumVersion.textContent = chromium ?? '—'
+    let text = ''
+    let button: string | undefined = 'Check for updates'
+    let busy = false
+    if (u?.checking) {
+      text = 'Checking…'
+      busy = true
+    } else if (u?.state === 'available') {
+      text = u.installed ? `Grove ${u.version} is available.` : `Grove ${u.version} is out. Pull and reinstall this checkout to update.`
+      button = u.installed ? `Update to ${u.version}` : undefined
+    } else if (u?.state === 'downloading') {
+      text = `Installing Grove ${u.version}…`
+      button = undefined
+    } else if (u?.state === 'ready') {
+      text = `Grove ${u.version} is installed. Restart to use it.`
+      button = 'Restart'
+    } else if (u?.state === 'error') {
+      text = `Couldn’t update: ${u.error ?? 'unknown error'}`
+      button = 'Retry'
+    } else if (u?.checkError) {
+      text = `Couldn’t check: ${u.checkError}`
+    } else if (u?.checkedAt) {
+      text = `Up to date. Checked ${ago(u.checkedAt)}.`
+    } else {
+      text = 'Grove looks for updates a minute after it starts, then every six hours.'
+    }
+    this.updateText.textContent = text
+    this.updateButton.hidden = !button
+    this.updateButton.textContent = button ?? ''
+    this.updateButton.disabled = busy
+    this.updateButton.classList.toggle('primary', button !== 'Check for updates')
   }
 
   private paint(): void {
@@ -285,6 +343,7 @@ class SettingsView {
     if (ai.accountId) this.aiAccountInput.value = this.aiTokenInput.value = ''
     this.autoOrganize.checked = s.settings.autoOrganize
     this.unloadAfter.value = String(s.settings.unloadAfter)
+    this.paintAbout(s)
     this.code.textContent = sync.code ? (this.showCode ? sync.code : '•'.repeat(32)) : ''
     this.code.classList.toggle('masked', !this.showCode)
     this.showButton.textContent = this.showCode ? 'Hide' : 'Show'

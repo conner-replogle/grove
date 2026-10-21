@@ -165,6 +165,18 @@ export interface UpdateStatus {
   // This copy was installed (install.sh or an update) and can update itself;
   // a checkout run with pnpm dev can't.
   installed: boolean
+  // The last look for a release: under way, when it was, what went wrong.
+  checking?: boolean
+  checkedAt?: number
+  checkError?: string
+}
+
+// What the settings' About shows.
+export interface AboutInfo {
+  version: string
+  chromium?: string
+  // The update state, whether or not the sidebar offers it.
+  update?: UpdateStatus
 }
 
 export interface WindowState {
@@ -189,6 +201,7 @@ export interface WindowState {
   // Workers AI key), under way, and the last failure.
   organize: { available: boolean; busy: boolean; error?: string }
   workersAi: WorkersAiStatus
+  about: AboutInfo
   // The window shows a Web Store extension's page.
   store?: StoreOffer
   // The page is in another language than the user's (or translated).
@@ -276,6 +289,8 @@ export type HostCommand =
   | { type: 'installUpdate' }
   | { type: 'restartForUpdate' }
   | { type: 'dismissUpdate' }
+  // Looks for a newer release now (the settings' Check for updates).
+  | { type: 'checkUpdates' }
 
 // A history suggestion for the URL bar (host/history-index.ts).
 export interface HistorySuggestion {
