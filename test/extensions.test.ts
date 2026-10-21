@@ -159,3 +159,13 @@ describe('StoreExtensions', () => {
     expect(ext.status(v1.id).state).toBe('removed')
   })
 })
+
+describe('Widevine', () => {
+  it("reads the component service's answer", async () => {
+    const { parseComponentUpdate } = await import('../host/widevine.ts')
+    const text = `)]}'
+{"response":{"app":[{"appid":"oimompecagnajdejgnnjijobebaeigek","status":"ok","updatecheck":{"status":"ok","urls":{"url":[{"codebase":"http://dl.google.com/x/"},{"codebase":"https://dl.google.com/x/"}]},"manifest":{"version":"4.10.3112.0","packages":{"package":[{"hash_sha256":"ab","name":"w.crx3"}]}}}}]}}`
+    expect(parseComponentUpdate(text)).toEqual({ version: '4.10.3112.0', url: 'https://dl.google.com/x/w.crx3', sha256: 'ab' })
+    expect(parseComponentUpdate(`)]}'\n{"response":{"app":[{"updatecheck":{"status":"noupdate"}}]}}`)).toBeUndefined()
+  })
+})

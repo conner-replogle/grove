@@ -40,6 +40,8 @@ import { SyncManager } from '../host/sync/manager.ts'
 import { Updater } from '../host/updates.ts'
 import { WorkersAiKeys } from '../host/workers-ai.ts'
 import { StoreExtensions } from '../host/extensions.ts'
+import { Widevine } from '../host/widevine.ts'
+import { fetchDictionaries } from '../host/dictionaries.ts'
 import { UI_BINDING, UI_RECEIVER } from '../shared/protocol.ts'
 import { PipeCDP } from './cdp.mjs'
 
@@ -143,6 +145,12 @@ function prepareProfile() {
   // starts with none, and its own Google entry points at dead addresses.
   if (!prefs.default_search_provider_data?.template_url_data) {
     prefs.default_search_provider_data = { ...prefs.default_search_provider_data, template_url_data: GOOGLE_SEARCH() }
+  }
+  // Spell check is on until the user turns it off, as in Chrome
+  // (ungoogled-chromium starts with it off; host/dictionaries.ts fetches
+  // the words).
+  if (prefs.browser?.enable_spellchecking === undefined) {
+    prefs.browser = { ...prefs.browser, enable_spellchecking: true }
   }
   writeFileSync(file, JSON.stringify(prefs))
 }
@@ -324,6 +332,15 @@ const extensions = new StoreExtensions({
 })
 host.extensions = extensions
 extensions.start()
+
+// Spell check dictionaries, which ungoogled-chromium won't download
+// (host/dictionaries.ts).
+setTimeout(() => void fetchDictionaries(PROFILE, (...a) => console.log('[grove]', ...a)), 30_000)
+
+// Widevine for DRM video and music, fetched as Chrome would (host/widevine.ts).
+if (process.platform === 'linux') {
+  new Widevine({ profile: PROFILE, chromeVersion: () => chromeVersion, log: (...a) => console.log('[grove]', ...a) }).start()
+}
 
 // Newer releases (host/updates.ts), offered in the windows.
 const updater = new Updater({
