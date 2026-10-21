@@ -67,5 +67,6 @@ jobs:
           cd release
           sha256sum -- * > SHA256SUMS
           previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
-          gh release create "$GITHUB_REF_NAME" -- * \
-            --title "Grove ${GITHUB_REF_NAME#v}" --generate-notes ${previous:+--notes-start-tag "$previous"}
+          # Options before the files: after "--" everything is a file.
+          gh release create "$GITHUB_REF_NAME" --title "Grove ${GITHUB_REF_NAME#v}" --generate-notes \
+            ${previous:+--notes-start-tag "$previous"} -- *
