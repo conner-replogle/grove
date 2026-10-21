@@ -68,6 +68,21 @@ function wire(host: SearchboxInput): void {
   }
   host.addEventListener('focus', lengthen, true)
   host.addEventListener('pointerdown', lengthen, true)
+  // The click that focuses the field selects all of it, as Chrome's
+  // omnibox does, so typing replaces the address. A drag that selected
+  // part of it keeps that.
+  let selectOnUp = false
+  host.addEventListener('pointerdown', () => (selectOnUp = !host.matches(':focus-within')), true)
+  host.addEventListener(
+    'pointerup',
+    () => {
+      if (!selectOnUp) return
+      selectOnUp = false
+      const input = field(host)
+      if (input && input.selectionStart === input.selectionEnd) input.select()
+    },
+    true
+  )
   host.addEventListener('focusout', () =>
     setTimeout(() => {
       if (!host.matches(':focus-within')) shorten(host)
