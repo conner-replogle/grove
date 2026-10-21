@@ -18,6 +18,7 @@ import { sidebarResizer } from './resize'
 import { showSettings } from './settings'
 import { showSplitView } from './split'
 import { showStoreOffers } from './webstore'
+import { showTranslateButton } from './translate'
 import { suggestFromHistory } from './suggestions'
 import { openUrlBarOnNewTab, releasePageFocus, watchUrlBarPlace } from './urlbar'
 import './sidebar'
@@ -50,6 +51,7 @@ if (!window.__grove) {
   showDownloads(main)
   showSettings(main)
   showStoreOffers(main)
+  showTranslateButton()
   showSplitView()
 
   // Webium routes every mousedown in the tab strip into its drag code,

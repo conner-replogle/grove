@@ -201,6 +201,31 @@
 }
 #addressBox:has(#address:focus-within) #extensionsBar { display: none; }
 
+/* Translate (translate.ts), beside the site controls: lit while the page
+ * is translated, pulsing while it's being translated. */
+#addressBox .grove-translate {
+  order: 1;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-inline-end: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-button, 6px);
+  color: inherit;
+  background: transparent;
+  opacity: 0.75;
+  cursor: pointer;
+}
+#addressBox .grove-translate[hidden] { display: none; }
+#addressBox .grove-translate:hover { opacity: 1; background: var(--zen-toolbar-element-bg-hover); }
+#addressBox .grove-translate[data-state='translated'] { opacity: 1; color: var(--zen-primary-color); }
+#addressBox .grove-translate[data-state='translating'] { animation: grove-translate-pulse 1s ease-in-out infinite; }
+@keyframes grove-translate-pulse { 50% { opacity: 0.3; } }
+#addressBox:has(#address:focus-within) .grove-translate { display: none; }
+
 /* The site controls button (connection, permissions) sits at the right end
  * of the bar next to the extensions button, as Zen's page actions do,
  * rather than over the start of the field. */

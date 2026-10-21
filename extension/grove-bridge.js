@@ -234,6 +234,40 @@ const historyItem = (h) => ({
 })
 chrome.history.onVisited.addListener((h) => emit({ type: 'historyVisited', item: historyItem(h) }))
 
+// Translate (translate.js): a page's text, a batch at a time, through
+// Google Translate (as Google's own page translator calls it), and how the
+// page's translation is going.
+async function translateBatch({ texts, source, target }) {
+  const body = new URLSearchParams()
+  for (const t of texts) body.append('q', t)
+  const sl = encodeURIComponent(source || 'auto')
+  const tl = encodeURIComponent(target)
+  const res = await fetch(`https://translate.googleapis.com/translate_a/t?client=gtx&sl=${sl}&tl=${tl}&format=text`, {
+    method: 'POST',
+    body
+  })
+  if (!res.ok) throw new Error(`Google Translate: HTTP ${res.status}`)
+  const json = await res.json()
+  // [[text, detected language], ...] when asked to detect; [text, ...] otherwise.
+  const rows = Array.isArray(json) ? json : [json]
+  const translations = rows.map((r) => (Array.isArray(r) ? r[0] : r))
+  const langs = rows.map((r) => (Array.isArray(r) ? r[1] : undefined)).filter(Boolean)
+  // The language most of the batch was in.
+  const count = new Map()
+  for (const l of langs) count.set(l, (count.get(l) ?? 0) + 1)
+  const detected = [...count].sort((a, b) => b[1] - a[1])[0]?.[0]
+  return { translations, source: detected }
+}
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.groveTranslateBatch) {
+    translateBatch(message.groveTranslateBatch).then(respond, () => respond(null))
+    return true
+  }
+  if (message?.groveTranslateState && sender.tab && !inOther(sender.tab.windowId)) {
+    emit({ type: 'translateState', tabId: sender.tab.id, ...message.groveTranslateState })
+  }
+})
+
 // An extension removed (chrome://extensions): Grove stops loading it if it
 // installed it from the Web Store.
 chrome.management.onUninstalled.addListener((id) => emit({ type: 'extensionUninstalled', id }))
@@ -278,6 +312,17 @@ globalThis.grove = {
   // What Chrome would warn an extension with this manifest can do.
   async permissionWarnings(manifest) {
     return chrome.management.getPermissionWarningsByManifest(manifest)
+  },
+  // Translate: start (to a language) or stop translating a tab's page, the
+  // page's language as Chrome tells it, and the user's.
+  async translate({ tabId, to }) {
+    await chrome.tabs.sendMessage(tabId, { groveTranslate: to ?? null }).catch(() => {})
+  },
+  async detectLanguage(tabId) {
+    return chrome.tabs.detectLanguage(tabId).catch(() => 'und')
+  },
+  uiLanguage() {
+    return chrome.i18n.getUILanguage()
   },
   // Turns an extension off (Grove removing one it installed: Chrome drops
   // it for good at its next start).

@@ -15,6 +15,7 @@ import { leaves } from './split.ts'
 import { applyOrganize, looseTabs, prepare, sendableUrl } from './organize.ts'
 import { organize as runOrganize, type AiRunner } from './organize-ai.ts'
 import { storeExtensionId } from './webstore.ts'
+import { PageTranslation } from './translate.ts'
 import type { Settings } from './settings.ts'
 import { keptByHost, type SitePermissions } from './site-permissions.ts'
 import type { Store } from './store.ts'
@@ -50,6 +51,7 @@ export type BridgeEvent =
   | { type: 'tabPainted'; tabId: number }
   | { type: 'historyVisited'; item: HistoryItem }
   | { type: 'extensionUninstalled'; id: string }
+  | { type: 'translateState'; tabId: number; state: 'translating' | 'translated' | 'original'; source?: string }
   | { type: 'historyRemoved'; all: boolean; urls: string[] }
 
 export interface Bridge {
@@ -185,6 +187,7 @@ export class GroveHost {
   sync?: SyncControl
   workersAi?: WorkersAiControl
   extensions?: ExtensionsControl
+  private translation?: PageTranslation
   updates?: UpdateControl
   // Quits Grove and starts it again (the launcher's).
   restart?: () => void
@@ -208,6 +211,8 @@ export class GroveHost {
 
   async attach(bridge: Bridge): Promise<void> {
     this.bridge = bridge
+    this.translation = new PageTranslation(bridge, () => this.queuePush())
+    void this.translation.init()
     const windows = await bridge.call<{ id: number; tabs: BridgeTab[] }[]>('snapshot')
     for (const w of windows) {
       const ws = M.getWorkspace(this.model, this.model.lastActiveWorkspaceId)
@@ -302,6 +307,8 @@ export class GroveHost {
         if (!this.tabWindow.has(e.tabId) || this.painted.has(e.tabId)) return
         this.painted.add(e.tabId)
         return this.queuePush()
+      case 'translateState':
+        return this.translation?.onState(e.tabId, e.state, e.source)
       case 'extensionUninstalled':
         return this.extensions?.forget(e.id)
       case 'historyVisited':
@@ -437,6 +444,7 @@ export class GroveHost {
   }
 
   private onTabRemoved(tabId: number, windowClosing: boolean): void {
+    this.translation?.removed(tabId)
     const windowId = this.tabWindow.get(tabId)
     this.tabWindow.delete(tabId)
     this.placeholders.delete(tabId)
@@ -464,6 +472,8 @@ export class GroveHost {
   private onTabUpdated(tab: BridgeTab): void {
     if (tab.audible) this.audible.add(tab.id)
     else this.audible.delete(tab.id)
+    // A page that has just finished loading gets its language looked at.
+    if (tab.status === 'complete' && this.loading.has(tab.id)) void this.translation?.loaded(tab.id)
     if (tab.status === 'loading') this.startLoading(tab.id)
     else this.stopLoading(tab.id)
     // Chrome's own pages run no content scripts to say they painted.
@@ -634,6 +644,10 @@ export class GroveHost {
         return this.workersAi?.set(c.accountId, c.token)
       case 'clearWorkersAi':
         return this.workersAi?.clear()
+      case 'translate': {
+        const tabId = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+        return tabId === undefined ? undefined : this.translation?.toggle(tabId)
+      }
       case 'storeInspect':
         return this.extensions?.inspect(c.id)
       case 'storeInstall':
@@ -1291,6 +1305,12 @@ export class GroveHost {
     return u
   }
 
+  private translateIn(b: Binding): WindowState['translate'] {
+    const tabId = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+    if (tabId !== undefined) this.translation?.shown(tabId)
+    return this.translation?.status(tabId)
+  }
+
   // The Web Store extension the window's page is about.
   private storeIn(b: Binding): StoreOffer | undefined {
     const url = b.activeEntryId ? this.entry(b.activeEntryId)?.url : undefined
@@ -1369,6 +1389,7 @@ export class GroveHost {
       organize: { available: !!this.workersAi?.status().accountId, busy: this.organizing.has(ws.id), error: this.organizeError },
       workersAi: this.workersAi?.status() ?? {},
       store: this.storeIn(b),
+      translate: this.translateIn(b),
       update: this.updateOffer()
     }
   }

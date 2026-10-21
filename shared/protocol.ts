@@ -122,6 +122,14 @@ export interface StoreOffer {
   error?: string
 }
 
+// Translate for the page a window shows (host/translate.ts): the page's
+// language, the user's, and whether it's translated.
+export interface TranslateStatus {
+  from: string
+  to: string
+  state: 'original' | 'translating' | 'translated'
+}
+
 // A download, as the sidebar's downloads panel shows it (newest first).
 export interface DownloadView {
   id: number
@@ -183,6 +191,8 @@ export interface WindowState {
   workersAi: WorkersAiStatus
   // The window shows a Web Store extension's page.
   store?: StoreOffer
+  // The page is in another language than the user's (or translated).
+  translate?: TranslateStatus
   update?: UpdateStatus
 }
 
@@ -241,6 +251,8 @@ export type HostCommand =
   | { type: 'clearWorkersAi' }
   // Web Store extensions: download and check one (then the user confirms),
   // install it, drop the offer, or remove one Grove installed.
+  // Translates the window's page, or shows it as it was.
+  | { type: 'translate' }
   | { type: 'storeInspect'; id: string }
   | { type: 'storeInstall'; id: string }
   | { type: 'storeCancel'; id: string }
