@@ -158,6 +158,10 @@ export class GroveHost {
   // finds a split's pages (Webium knows its tabs by ids of its own).
   private readonly tabIndex = new Map<number, number>()
   private orderQueued?: ReturnType<typeof setTimeout>
+  // Entries activateIn is showing now, and the pending look for paused
+  // windows to give their page back to (queueReclaim).
+  private readonly activating = new Set<string>()
+  private reclaimQueued?: ReturnType<typeof setTimeout>
   // A window's next new tab joins this entry in a split (splitNextTab).
   private splitNext?: { windowId: number; entryId: string; at: number }
   // Tabs whose page has drawn (or finished loading); see EntryView.painted.
@@ -700,6 +704,16 @@ export class GroveHost {
   async activateIn(windowId: number, entryId: string): Promise<void> {
     const b = this.bindWindow(windowId)
     if (!this.shows(b, entryId)) return
+    this.activating.add(entryId)
+    try {
+      await this.showIn(windowId, b, entryId)
+    } finally {
+      this.activating.delete(entryId)
+      this.queueReclaim()
+    }
+  }
+
+  private async showIn(windowId: number, b: Binding, entryId: string): Promise<void> {
     this.setActive(windowId, b, entryId)
     this.pushAll()
     const bridge = this.bridge!
@@ -1218,6 +1232,27 @@ export class GroveHost {
   private pushAll(): void {
     this.noteShown()
     for (const id of this.windows.keys()) this.push(id)
+    this.queueReclaim()
+  }
+
+  // A window that shows an entry paused (its page is live in another
+  // window) gets the page back once that window moves off it: another
+  // tab, another workspace, the window closed. Looked at a moment after
+  // each change, so a move under way (activating) settles first.
+  private queueReclaim(): void {
+    if (this.reclaimQueued || !this.bridge) return
+    this.reclaimQueued = setTimeout(() => {
+      this.reclaimQueued = undefined
+      const claimed = new Set<string>()
+      for (const [windowId, b] of this.windows) {
+        const paused = this.pausedIn(windowId, b)
+        if (!paused || claimed.has(paused.entryId) || this.activating.has(paused.entryId)) continue
+        const holder = this.windows.get(this.tabWindow.get(this.tabOf.get(paused.entryId)!)!)
+        if (holder && this.shownBy(holder).includes(paused.entryId)) continue
+        claimed.add(paused.entryId)
+        void this.activateIn(windowId, paused.entryId).catch((e: unknown) => this.log('reclaim', e))
+      }
+    }, 100)
   }
 
   push(windowId: number): void {
