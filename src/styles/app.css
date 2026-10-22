@@ -39,8 +39,9 @@
 }
 #appMenuButton { order: -2; }
 /* On macOS the window's close/minimise/zoom buttons sit at the top left,
- * over this row; the buttons start past them. */
-:host(.grove-mac) #searchBar { padding-inline-start: 68px !important; }
+ * over this row; its first button starts past them. (Only the buttons'
+ * row: the address bar below keeps the full width.) */
+:host(.grove-mac) #groveSidebarToggle { margin-inline-start: 69px; }
 /* compact.ts's sidebar button, first in the row as in Zen; sized like
  * Webium's buttons beside it. */
 #groveSidebarToggle {
