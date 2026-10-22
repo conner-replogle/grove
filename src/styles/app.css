@@ -602,3 +602,186 @@ webui-browser-bookmark-bar { display: none !important; }
   pointer-events: none;
   background: light-dark(#fff, rgb(32, 32, 32));
 }
+
+/* ---- The site panel (site-panel.ts), as Zen's ---- */
+
+/* Chrome's app menu and page info open from the panel now. */
+#appMenuButton,
+#locationIconButton { display: none !important; }
+
+#addressBox .grove-copy-link,
+#addressBox .grove-site-button {
+  order: 3;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-inline-end: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-button, 6px);
+  color: inherit;
+  background: transparent;
+  opacity: 0.75;
+  cursor: pointer;
+}
+#addressBox .grove-site-button { order: 4; margin-inline-end: 4px; }
+#addressBox .grove-copy-link svg,
+#addressBox .grove-site-button svg { width: 15px; height: 15px; }
+#addressBox .grove-copy-link:hover,
+#addressBox .grove-site-button:hover,
+#addressBox .grove-site-button.open { opacity: 1; background: var(--zen-toolbar-element-bg-hover); }
+#addressBox .grove-copy-link[hidden],
+#addressBox .grove-site-button[hidden],
+#addressBox:has(#address:focus-within) .grove-copy-link,
+#addressBox:has(#address:focus-within) .grove-site-button { display: none; }
+
+.grove-toast {
+  position: fixed;
+  z-index: 1001;
+  translate: -50% 0;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font: 500 12.5px system-ui, sans-serif;
+  color: light-dark(#1d1d1f, #ececef);
+  background: light-dark(rgba(250, 250, 250, 0.97), rgba(34, 34, 36, 0.97));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  animation: grove-toast-in 0.15s ease-out;
+  transition: opacity 0.3s;
+}
+.grove-toast.leaving { opacity: 0; }
+@keyframes grove-toast-in { from { opacity: 0; translate: -50% -4px; } }
+
+.grove-site-panel {
+  --site-fg: light-dark(#1d1d1f, #ececef);
+  --site-dim: color-mix(in srgb, var(--site-fg) 55%, transparent);
+  --site-tile: light-dark(rgba(0, 0, 0, 0.055), rgba(255, 255, 255, 0.07));
+  --site-tile-hover: light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.12));
+  --site-strong: light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.45));
+  position: fixed;
+  z-index: 1002;
+  width: 340px;
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+  color: var(--site-fg);
+  background: light-dark(rgba(248, 248, 248, 0.98), rgba(38, 40, 40, 0.98));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  font: 13px system-ui, sans-serif;
+  animation: grove-site-in 0.12s ease-out;
+  transform-origin: var(--arrow-x) top;
+}
+@keyframes grove-site-in { from { opacity: 0; scale: 0.97; } }
+/* The arrow, pointing at the button. */
+.grove-site-panel::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: calc(var(--arrow-x) - 7px);
+  width: 12px;
+  height: 12px;
+  rotate: 45deg;
+  background: inherit;
+  border: inherit;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 3px 0 0 0;
+}
+.grove-site-panel button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  cursor: pointer;
+}
+.grove-site-panel button:disabled { opacity: 0.4; cursor: default; }
+.grove-site-panel svg { width: 18px; height: 18px; }
+
+.grove-site-actions { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; }
+.grove-site-actions button {
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--site-strong);
+  box-shadow: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.06));
+}
+.grove-site-actions button:hover:not(:disabled) { background: var(--site-tile-hover); }
+.grove-site-actions button.on { color: var(--zen-primary-color); }
+.grove-site-notice { margin-top: 10px; font-size: 12px; color: var(--site-dim); }
+
+.grove-site-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 16px 2px 10px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.grove-site-more { padding: 0; background: none; color: var(--site-dim) !important; font-size: 12.5px !important; font-weight: 500 !important; }
+.grove-site-more:hover { color: var(--site-fg) !important; }
+
+.grove-site-extensions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.grove-site-extension {
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--site-tile);
+}
+.grove-site-extension:hover { background: var(--site-tile-hover); }
+.grove-site-extension img { width: 20px; height: 20px; display: block; }
+
+.grove-site-settings { display: flex; flex-direction: column; gap: 2px; }
+.grove-site-setting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px;
+  border-radius: 10px;
+  background: none;
+  text-align: start;
+}
+.grove-site-setting:hover { background: var(--site-tile); }
+.grove-site-setting-icon {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: light-dark(#1d1d1f, #1d1d1f);
+  background: light-dark(rgba(0, 0, 0, 0.08), rgba(236, 236, 239, 0.9));
+}
+.grove-site-setting-icon svg { width: 16px; height: 16px; }
+.grove-site-setting.blocked .grove-site-setting-icon { color: var(--site-fg); background: var(--site-tile); }
+.grove-site-setting-text { display: flex; flex-direction: column; min-width: 0; }
+.grove-site-setting-text span { font-weight: 500; }
+.grove-site-setting-text small { color: var(--site-dim); font-size: 11.5px; }
+.grove-site-empty { padding: 2px 2px 4px; color: var(--site-dim); font-size: 12px; }
+
+.grove-site-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px -12px -12px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
+}
+.grove-site-footer button {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--site-tile);
+}
+.grove-site-footer button:hover:not(:disabled) { background: var(--site-tile-hover); }
+.grove-site-footer svg { width: 16px; height: 16px; }
+.grove-site-security { font-weight: 500 !important; }
+.grove-site-security.insecure { color: light-dark(#c5221f, #f28b82) !important; }
+.grove-site-clear.armed { color: light-dark(#c5221f, #f28b82) !important; }
+.grove-site-menu { margin-inline-start: auto; width: 34px; justify-content: center; padding: 0 !important; border-radius: 50% !important; }

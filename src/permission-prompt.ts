@@ -8,7 +8,7 @@ import { send, subscribe } from './host-client'
 import { icons } from './icons'
 import { svg } from './svg'
 
-const WHAT: Record<PermissionKind, [icon: string, label: string]> = {
+export const WHAT: Record<PermissionKind, [icon: string, label: string]> = {
   notifications: [icons.bell, 'Show notifications'],
   geolocation: [icons.mapPin, 'Know your location'],
   camera: [icons.camera, 'Use your camera'],

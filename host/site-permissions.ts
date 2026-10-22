@@ -65,6 +65,11 @@ export class SitePermissions {
     await this.applyOne(entry)
   }
 
+  // What the site was given.
+  forOrigin(origin: string): { kind: PermissionKind; setting: Setting }[] {
+    return this.saved.filter((s) => s.origin === origin).map(({ kind, setting }) => ({ kind, setting }))
+  }
+
   private async applyOne({ origin, kind, setting }: Saved): Promise<void> {
     for (const descriptor of DESCRIPTORS[kind] ?? []) {
       // A name this Chrome doesn't know is refused; the others still apply.

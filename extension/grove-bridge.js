@@ -134,6 +134,9 @@ const KINDS = new Set([
   'storageAccess',
   'localNetwork'
 ])
+// Site settings the site panel shows once a site has its own (and lets the
+// person flip between allow and block).
+const SITE_SETTINGS = ['notifications', 'location', 'camera', 'microphone', 'clipboard', 'popups', 'sound', 'javascript', 'images']
 const permissionRequests = new Map()
 let nextPermission = 1
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -471,5 +474,70 @@ globalThis.grove = {
       }
     }
     request.respond(decision)
+  },
+
+  // ---- The site panel (src/site-panel.ts) ----
+
+  // The site's settings that differ from the defaults (the ones it was
+  // given), by contentSettings name, and whether the page is bookmarked.
+  async siteInfo({ origin, url, tabId }) {
+    const settings = []
+    if (/^https?:/.test(origin)) {
+      for (const name of SITE_SETTINGS) {
+        const api = chrome.contentSettings[name]
+        if (!api) continue
+        const [own, usual] = await Promise.all([
+          api.get({ primaryUrl: `${origin}/` }).catch(() => undefined),
+          api.get({ primaryUrl: 'https://grove-default.invalid/' }).catch(() => undefined)
+        ])
+        if (own && usual && own.setting !== usual.setting) settings.push({ name, setting: own.setting })
+      }
+    }
+    const marks = url ? await chrome.bookmarks.search({ url }).catch(() => []) : []
+    // Reader view (reader.js) can be closed from the page itself.
+    const reader =
+      tabId !== undefined &&
+      (await chrome.scripting
+        .executeScript({ target: { tabId }, func: () => !!document.getElementById('grove-reader') })
+        .then(([r]) => r?.result === true)
+        .catch(() => false))
+    return { settings, bookmarked: marks.length > 0, reader }
+  },
+  async setSiteSetting({ origin, name, setting }) {
+    if (!SITE_SETTINGS.includes(name)) return
+    await chrome.contentSettings[name].set({ primaryPattern: `${origin}/*`, setting })
+  },
+  // Bookmarks the page, or removes its bookmarks; whether it's bookmarked now.
+  async toggleBookmark({ url, title }) {
+    const marks = await chrome.bookmarks.search({ url })
+    if (marks.length) {
+      for (const m of marks) await chrome.bookmarks.remove(m.id)
+      return false
+    }
+    await chrome.bookmarks.create({ url, title })
+    return true
+  },
+  // Forgets what the site keeps here (cookies, storage, cache), then loads
+  // the page again.
+  async clearSiteData({ origin, tabId }) {
+    await chrome.browsingData.remove(
+      { origins: [origin] },
+      { cookies: true, localStorage: true, indexedDB: true, cacheStorage: true, serviceWorkers: true, fileSystems: true, cache: true }
+    )
+    if (tabId !== undefined) await chrome.tabs.reload(tabId).catch(() => {})
+  },
+  // Turns reader view (reader.js) on or off: whether it's on now, or null
+  // if the page has no article to show.
+  async reader(tabId) {
+    const [result] = await chrome.scripting.executeScript({ target: { tabId }, files: ['readability.js', 'reader.js'] })
+    return result?.result ?? null
+  },
+  // What the window shows, as a PNG in Downloads (where the downloads
+  // panel shows it).
+  async screenshot({ windowId, title }) {
+    const url = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' })
+    const stamp = new Date().toISOString().slice(0, 19).replace('T', ' at ').replaceAll(':', '.')
+    const name = `${(title || 'Screenshot').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80)} ${stamp}.png`
+    await chrome.downloads.download({ url, filename: name })
   }
 }

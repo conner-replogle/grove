@@ -7,7 +7,7 @@
 // is instant; the idle sweep (unloadIdle) frees pages no window has shown
 // for a while. (Decision 2 had workspaces no window shows keep no pages,
 // which made every return to a workspace reload its tabs from scratch.)
-import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SyncStatus, type StoreOffer, type UpdateStatus, type WindowState, type WorkersAiStatus } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SiteInfo, type SyncStatus, type StoreOffer, type UpdateStatus, type WindowState, type WorkersAiStatus } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import * as M from './model.ts'
@@ -190,6 +190,8 @@ export class GroveHost {
   workersAi?: WorkersAiControl
   extensions?: ExtensionsControl
   private translation?: PageTranslation
+  // The site panel's view of each window's page, once it asked.
+  private readonly siteInfos = new Map<number, SiteInfo>()
   updates?: UpdateControl
   // Chrome's version, for the settings' About.
   chromeVersion?: () => string
@@ -683,7 +685,74 @@ export class GroveHost {
         return this.pushAll()
       case 'checkUpdates':
         return this.updates?.check()
+      case 'siteInfo':
+      case 'setSiteSetting':
+      case 'setKeptPermission':
+      case 'toggleBookmark':
+      case 'screenshot':
+      case 'reader':
+      case 'clearSiteData':
+        return this.sitePanel(windowId, b, c)
     }
+  }
+
+  // ---- The site panel ----
+
+  private async sitePanel(windowId: number, b: Binding, c: HostCommand): Promise<void> {
+    const entry = b.activeEntryId ? this.entry(b.activeEntryId) : undefined
+    const tabId = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+    if (!entry || !this.bridge) return
+    const url = entry.url
+    const origin = originOf(url) ?? ''
+    let notice: string | undefined
+    try {
+      switch (c.type) {
+        case 'setSiteSetting':
+          await this.bridge.call('setSiteSetting', { origin, name: c.name, setting: c.setting })
+          break
+        case 'setKeptPermission':
+          await this.sitePermissions?.set(origin, c.kind, c.setting)
+          break
+        case 'toggleBookmark':
+          await this.bridge.call('toggleBookmark', { url, title: entry.title })
+          break
+        case 'screenshot':
+          await this.bridge.call('screenshot', { windowId, title: entry.title })
+          break
+        case 'reader': {
+          if (tabId === undefined) break
+          const on = await this.bridge.call<boolean | null>('reader', tabId)
+          if (on === null) notice = 'This page has no article to show in reader view.'
+          break
+        }
+        case 'clearSiteData':
+          await this.bridge.call('clearSiteData', { origin, tabId })
+          break
+      }
+    } catch (e) {
+      notice = (e as Error).message
+      this.log('site panel', c.type, notice)
+    }
+    const info = await this.bridge
+      .call<{ settings: SiteInfo['settings']; bookmarked: boolean; reader: boolean }>('siteInfo', { origin, url, tabId })
+      .catch(() => ({ settings: [], bookmarked: false, reader: false }))
+    this.siteInfos.set(windowId, {
+      url,
+      origin,
+      settings: info.settings,
+      kept: this.sitePermissions?.forOrigin(origin) ?? [],
+      bookmarked: info.bookmarked,
+      reader: info.reader,
+      notice
+    })
+    this.push(windowId)
+  }
+
+  // The panel's view, while it's still about the window's page.
+  private siteIn(windowId: number, b: Binding): SiteInfo | undefined {
+    const info = this.siteInfos.get(windowId)
+    const entry = b.activeEntryId ? this.entry(b.activeEntryId) : undefined
+    return info && entry?.url === info.url ? info : undefined
   }
 
   // Opens a URL bar suggestion of Grove's own: in the window's tab, or in a
@@ -1397,6 +1466,7 @@ export class GroveHost {
       store: this.storeIn(b),
       translate: this.translateIn(b),
       update: this.updateOffer(),
+      site: this.siteIn(windowId, b),
       about: {
         version: this.updates?.current ?? '',
         chromium: this.chromeVersion?.(),

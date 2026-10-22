@@ -130,6 +130,22 @@ export interface TranslateStatus {
   state: 'original' | 'translating' | 'translated'
 }
 
+// The site panel (src/site-panel.ts), for the page a window shows, once
+// the panel has asked (siteInfo): the settings the site was given (Chrome's
+// own, by contentSettings name, and the ones Grove keeps), whether the page
+// is bookmarked, and whether reader view is on.
+export type SiteSetting = 'allow' | 'block' | 'ask' | 'session_only' | 'detect_important_content'
+export interface SiteInfo {
+  url: string
+  origin: string
+  settings: { name: string; setting: SiteSetting }[]
+  kept: { kind: PermissionKind; setting: 'granted' | 'denied' }[]
+  bookmarked: boolean
+  reader: boolean
+  // Something the last action couldn't do.
+  notice?: string
+}
+
 // A download, as the sidebar's downloads panel shows it (newest first).
 export interface DownloadView {
   id: number
@@ -207,6 +223,7 @@ export interface WindowState {
   // The page is in another language than the user's (or translated).
   translate?: TranslateStatus
   update?: UpdateStatus
+  site?: SiteInfo
 }
 
 export type HostCommand =
@@ -291,6 +308,14 @@ export type HostCommand =
   | { type: 'dismissUpdate' }
   // Looks for a newer release now (the settings' Check for updates).
   | { type: 'checkUpdates' }
+  // The site panel, for the window's page.
+  | { type: 'siteInfo' }
+  | { type: 'setSiteSetting'; name: string; setting: 'allow' | 'block' }
+  | { type: 'setKeptPermission'; kind: PermissionKind; setting: 'granted' | 'denied' }
+  | { type: 'toggleBookmark' }
+  | { type: 'screenshot' }
+  | { type: 'reader' }
+  | { type: 'clearSiteData' }
 
 // A history suggestion for the URL bar (host/history-index.ts).
 export interface HistorySuggestion {

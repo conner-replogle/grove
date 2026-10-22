@@ -16,6 +16,7 @@ import { showPausedPages } from './paused'
 import { showPermissionPrompts } from './permission-prompt'
 import { sidebarResizer } from './resize'
 import { showSettings } from './settings'
+import { showSitePanel } from './site-panel'
 import { showSplitView } from './split'
 import { showStoreOffers } from './webstore'
 import { showTranslateButton } from './translate'
@@ -52,6 +53,7 @@ if (!window.__grove) {
   showSettings(main)
   showStoreOffers(main)
   showTranslateButton()
+  showSitePanel()
   showSplitView()
 
   // Webium routes every mousedown in the tab strip into its drag code,

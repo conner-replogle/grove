@@ -15,7 +15,43 @@ const TRACKER_MODULE = '//resources/js/tracked_element/tracked_element_manager.j
 const MENU_REACH = 400
 // Extension popups can be up to 800px wide; 1Password's two-pane popup is
 // 600px, plus the bubble's border.
-const POPUP_REACH = 620
+export const POPUP_REACH = 620
+
+let trackerLoad: Promise<Tracker> | undefined
+const tracker = (): Promise<Tracker> =>
+  (trackerLoad ??= import(/* @vite-ignore */ TRACKER_MODULE).then((m) => m.TrackedElementManager.getInstance()))
+const anchors = new Map<string, HTMLElement>()
+
+// Shows Chrome where to open the native bubble it anchors to `nativeId`
+// (and `secondaryId`): at `button`, reaching `reach` px right of its left
+// edge (0: just the button), instead of `replaces`, the element Chrome's
+// own UI tracks for it. Call right before the press that opens it.
+export async function anchorAt(
+  button: HTMLElement,
+  nativeId: string,
+  secondaryId?: string,
+  reach = 0,
+  replaces?: Element
+): Promise<void> {
+  const t = await tracker()
+  if (replaces) t.stopTracking(replaces)
+  const key = `${nativeId} ${secondaryId ?? ''}`
+  let anchor = anchors.get(key)
+  if (!anchor) {
+    anchor = document.createElement('div')
+    anchor.style.cssText = 'position:fixed;pointer-events:none;visibility:visible;z-index:-1'
+    anchors.set(key, anchor)
+  }
+  if (!anchor.isConnected) document.body.append(anchor)
+  const r = button.getBoundingClientRect()
+  const width = Math.max(r.width, Math.min(reach, innerWidth - r.left - 8))
+  anchor.style.left = `${r.left}px`
+  anchor.style.top = `${r.top}px`
+  anchor.style.width = `${width}px`
+  anchor.style.height = `${r.height}px`
+  t.stopTracking(anchor)
+  t.startTracking(anchor, nativeId, secondaryId === undefined ? undefined : { secondaryId })
+}
 
 // Pinned extension buttons (webui-browser-extension) track themselves as
 // kToolbarActionViewElementId / "ext:<id>"; the menu button as
@@ -23,30 +59,8 @@ const POPUP_REACH = 620
 export async function anchorExtensionsBar(bar: Element): Promise<void> {
   const root = bar.shadowRoot
   if (!root) return
-  const { TrackedElementManager } = await import(/* @vite-ignore */ TRACKER_MODULE)
-  const tracker: Tracker = TrackedElementManager.getInstance()
-  const anchors = new Map<string, HTMLElement>()
-
-  // Chrome reads an anchor's bounds when they're reported, so place it and
-  // report it again right before each press.
-  const place = (button: HTMLElement, nativeId: string, secondaryId: string, reach: number): void => {
-    let anchor = anchors.get(secondaryId)
-    if (!anchor) {
-      anchor = document.createElement('div')
-      anchor.style.cssText = 'position:fixed;pointer-events:none;visibility:visible;z-index:-1'
-      anchors.set(secondaryId, anchor)
-    }
-    if (!anchor.isConnected) document.body.append(anchor)
-    const r = button.getBoundingClientRect()
-    const width = Math.max(r.width, Math.min(reach, innerWidth - r.left - 8))
-    anchor.style.left = `${r.left}px`
-    anchor.style.top = `${r.top}px`
-    anchor.style.width = `${width}px`
-    anchor.style.height = `${r.height}px`
-    tracker.stopTracking(button)
-    tracker.stopTracking(anchor)
-    tracker.startTracking(anchor, nativeId, { secondaryId })
-  }
+  const place = (button: HTMLElement, nativeId: string, secondaryId: string, reach: number): void =>
+    void anchorAt(button, nativeId, secondaryId, reach, button)
 
   const onPress = (e: Event): void => {
     for (const node of e.composedPath()) {

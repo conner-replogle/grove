@@ -11,7 +11,10 @@
     "sessions",
     "idle",
     "history",
-    "management"
+    "management",
+    "bookmarks",
+    "browsingData",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
