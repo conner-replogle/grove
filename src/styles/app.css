@@ -94,6 +94,9 @@
   --cr-searchbox-font-size: 13px;
   --color-searchbox-background: transparent;
   --color-searchbox-foreground: color-mix(in srgb, var(--toolbox-textcolor) 70%, transparent);
+  /* The sidebar's colors, not Chrome's grey, for the empty field. */
+  --color-searchbox-placeholder: color-mix(in srgb, var(--toolbox-textcolor) 55%, transparent);
+  --color-searchbox-search-icon-background: color-mix(in srgb, var(--toolbox-textcolor) 55%, transparent);
   --cr-searchbox-icon-left-position: 9px;
   --cr-searchbox-icon-right-position: 5px;
   margin: 0;
