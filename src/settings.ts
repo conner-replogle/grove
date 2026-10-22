@@ -76,6 +76,7 @@ class SettingsView {
   private readonly updateButton = el('button', 'grove-settings-button')
   // General.
   private readonly resume = toggle()
+  private readonly debug = toggle()
   private readonly unloadAfter = select(UNLOAD_CHOICES.map((m) => [String(m), m ? duration(m) : 'Never']))
 
   constructor(onClose: () => void) {
@@ -241,6 +242,12 @@ class SettingsView {
         "Close the page of a tab you haven't looked at for this long, to free memory. Selecting it opens it again as it was. Tabs playing sound or holding something you typed stay.",
         this.unloadAfter,
         (v) => this.set({ unloadAfter: Number(v) })
+      ),
+      toggleRow(
+        'Debug mode',
+        'Keeps the last 30 seconds of Grove: a recording of its windows, its logs, and what you click and press in its sidebar and URL bar. The bug button in the sidebar saves them to Downloads, to send with a bug report.',
+        this.debug,
+        (on) => this.set({ debug: on })
       )
     )
 
@@ -332,6 +339,7 @@ class SettingsView {
       : ''
     this.syncTabs.checked = s.settings.syncTabs === 'all'
     this.resume.checked = s.settings.resume
+    this.debug.checked = s.settings.debug
     const ai = s.workersAi
     this.aiOff.hidden = !!ai.accountId
     this.aiOn.hidden = !ai.accountId

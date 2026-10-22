@@ -9,6 +9,7 @@ import urlbarResultsCss from './zen/urlbar-results.css'
 import { addStyles, patchMethod } from './patch'
 import { showDomainOnly } from './address'
 import { compactMode, sidebarToggle } from './compact'
+import { recordDebugInput } from './debug'
 import { anchorExtensionsBar } from './extensions-anchor'
 import { showDownloads } from './downloads'
 import { coverUnpaintedPages } from './loading-cover'
@@ -55,6 +56,7 @@ if (!window.__grove) {
   showTranslateButton()
   showSitePanel()
   showSplitView()
+  recordDebugInput()
 
   // Webium routes every mousedown in the tab strip into its drag code,
   // which assumes a horizontal strip (and, fed vertical positions, can ask

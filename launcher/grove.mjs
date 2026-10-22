@@ -29,9 +29,11 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, watch, writeFileSync } from 'node:fs'
-import { homedir, hostname } from 'node:os'
+import { arch, homedir, hostname, release } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { formatWithOptions } from 'node:util'
+import { DebugRecorder, redact, reveal } from '../host/debug.ts'
 import { GroveHost } from '../host/host.ts'
 import { SitePermissions } from '../host/site-permissions.ts'
 import { Store } from '../host/store.ts'
@@ -59,7 +61,19 @@ const BRIDGE_SCRIPT = /\/grove-bridge\.[0-9a-f]+\.js$/
 const dev = process.argv.includes('--dev')
 // URLs and Chrome flags (--new-window, ...) go on to Chrome.
 const passArgs = process.argv.slice(2).filter((a) => a !== '--dev')
-const log = (...a) => dev && console.log('[grove]', ...a)
+// The last 30 seconds of Grove, for Debug mode's packets (host/debug.ts):
+// everything Grove logs goes into it, printed or not.
+const debug = new DebugRecorder()
+const format = (a) => formatWithOptions({ depth: 4, breakLength: Infinity }, ...a)
+const print = console.log.bind(console)
+for (const level of ['log', 'warn', 'error']) {
+  const write = console[level].bind(console)
+  console[level] = (...a) => {
+    debug.record(level === 'log' ? 'host' : `host ${level}`, format(a))
+    write(...a)
+  }
+}
+const log = (...a) => (dev ? console.log('[grove]', ...a) : debug.record('host', format(['[grove]', ...a])))
 
 // If Grove is already running on this profile, Chrome hands this launch
 // (a new window, a URL) to it and exits. Leave that instance's profile and
@@ -199,9 +213,7 @@ function mergeFlags(flags) {
   return rest
 }
 
-const chrome = spawn(
-  CHROME,
-  mergeFlags([
+const chromeArgs = mergeFlags([
     ...userFlags(),
     `--user-data-dir=${PROFILE}`,
     `--enable-features=${FEATURES}`,
@@ -216,9 +228,17 @@ const chrome = spawn(
     // it. Grove is a person's browser, not automation.
     '--disable-blink-features=AutomationControlled',
     ...passArgs
-  ]),
-  { stdio: ['ignore', 'ignore', dev ? 'inherit' : 'ignore', 'pipe', 'pipe'] }
-)
+  ])
+const chrome = spawn(CHROME, chromeArgs, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] })
+// Chrome's own output: printed in --dev, and kept for a debug packet.
+let stderrRest = ''
+chrome.stdio[2].setEncoding('utf8')
+chrome.stdio[2].on('data', (chunk) => {
+  if (dev) process.stderr.write(chunk)
+  const lines = (stderrRest + chunk).split('\n')
+  stderrRest = lines.pop()
+  for (const l of lines) if (l.trim()) debug.record('chrome', l)
+})
 // Set when Grove quits to restart (into an update): the launcher starts a
 // new Grove once Chrome has gone (and released the profile).
 let relaunch = false
@@ -248,11 +268,67 @@ let bundle = readFileSync(BUNDLE, 'utf8')
 // UI session id -> { windowId, script: new-document script id }
 const uiSessions = new Map()
 const sessionOfWindow = (windowId) => [...uiSessions].find(([, s]) => s.windowId === windowId)?.[0]
+// The state last pushed to each window, for a debug packet.
+const lastStates = new Map()
+const lastPushed = new Map()
+
+// ---- Debug mode ----
+
+// While it is on, each window's UI page (which has the window's pages in
+// it) sends a frame whenever it changes, five a second at most: the
+// recording in a debug packet. Chrome's own bubbles and menus aren't in it.
+let debugOn = false
+function setDebugMode(on) {
+  if (on === debugOn) return
+  debugOn = on
+  log('debug mode', on ? 'on' : 'off')
+  for (const sessionId of uiSessions.keys()) {
+    if (on) startFrames(sessionId)
+    else cdp.send('Page.stopScreencast', {}, sessionId).catch(() => {})
+  }
+  if (!on) debug.dropFrames()
+}
+const startFrames = (sessionId) =>
+  cdp
+    .send('Page.startScreencast', { format: 'jpeg', quality: 55, maxWidth: 1440, maxHeight: 1440 }, sessionId)
+    .catch((e) => log('screencast:', e.message))
+cdp.on('Page.screencastFrame', ({ data, sessionId: frame }, sessionId) => {
+  const s = uiSessions.get(sessionId)
+  if (debugOn && s) debug.frame(s.windowId, data)
+  // Chrome sends the next frame once this one is acknowledged.
+  setTimeout(() => cdp.send('Page.screencastFrameAck', { sessionId: frame }, sessionId).catch(() => {}), 200)
+})
+
+// A line for the timeline: what a pushed state shows.
+function describeState(s) {
+  const active = [...s.essentials, ...s.workspace.entries].find((e) => e.id === s.activeEntryId)
+  const extra = ['paused', 'split', 'store', 'translate', 'site', 'update'].filter((k) => s[k])
+  return (
+    `workspace "${s.workspace.name}", ${s.workspace.entries.length} entries, active ` +
+    (active ? `"${active.title}" ${active.url}` : 'none') +
+    (extra.length ? `; ${extra.join(', ')}` : '')
+  )
+}
+
+// The windows' UI, its open shadow roots included, without long data: URLs.
+const DOM_SNAPSHOT = `(() => {
+  const roots = []
+  const walk = (node) => {
+    for (const e of node.querySelectorAll('*')) if (e.shadowRoot) roots.push(e.shadowRoot), walk(e.shadowRoot)
+  }
+  walk(document)
+  return document.documentElement.getHTML({ shadowRoots: roots }).replace(/data:[^"'\\s)]{200,}/g, (m) => m.slice(0, 48) + '…')
+})()`
 
 const host = new GroveHost(
   new Store(join(PROFILE, 'grove-workspaces.json')),
   {
     push(windowId, state) {
+      lastStates.set(windowId, state)
+      setDebugMode(!!state.settings.debug)
+      const line = describeState(state)
+      if (lastPushed.get(windowId) !== line) debug.record(`push w${windowId}`, line)
+      lastPushed.set(windowId, line)
       const sessionId = sessionOfWindow(windowId)
       if (!sessionId) return
       const expression = `window.${UI_RECEIVER}?.update(${JSON.stringify(state)})`
@@ -354,6 +430,48 @@ const updater = new Updater({
   log: (...a) => console.log('[grove]', ...a)
 })
 host.updates = updater
+// Debug mode's packet: the recorder's 30 seconds, and each window as it is
+// now.
+host.debug = {
+  reveal,
+  async save() {
+    const files = []
+    const windows = {}
+    for (const [sessionId, { windowId }] of uiSessions) {
+      const send = (method, params) => timed(cdp.send(method, params, sessionId), 5000, method).catch((e) => ({ error: e.message }))
+      const shot = await send('Page.captureScreenshot', { format: 'png' })
+      if (shot.data) files.push({ name: `windows/w${windowId}.png`, data: Buffer.from(shot.data, 'base64') })
+      const dom = await send('Runtime.evaluate', { expression: DOM_SNAPSHOT, returnByValue: true })
+      if (typeof dom.result?.value === 'string') files.push({ name: `windows/w${windowId}.html`, data: dom.result.value })
+      windows[windowId] = { state: redact(lastStates.get(windowId)), screenshot: shot.error, dom: dom.error }
+    }
+    const targets = await cdp
+      .send('Target.getTargets')
+      .then((r) => r.targetInfos.map(({ type, url, title, attached }) => ({ type, url, title, attached })))
+      .catch((e) => e.message)
+    const extensionList = await bridge.call('extensionList').catch((e) => e.message)
+    return debug.save(
+      {
+        grove: updater.current,
+        chrome: chromeVersion,
+        platform: `${process.platform} ${release()} ${arch()}`,
+        node: process.version,
+        dev,
+        uptimeSeconds: Math.round((Date.now() - debug.startedAt) / 1000),
+        chromeBinary: CHROME,
+        chromeArgs,
+        profile: PROFILE,
+        settings: settings.get(),
+        bridgeConnected: !!bridgeSession,
+        windows,
+        targets,
+        extensions: extensionList,
+        model: redact(host.current)
+      },
+      files
+    )
+  }
+}
 host.restart = () => {
   relaunch = true
   cdp.send('Browser.close').catch(() => chrome.kill('SIGTERM'))
@@ -405,6 +523,7 @@ async function attachUi(sessionId, targetInfo, waiting) {
   log('window node', nodeId)
   const windowId = Number(String(nodeId).split(':')[0])
   uiSessions.set(sessionId, { windowId, script: identifier })
+  if (debugOn) startFrames(sessionId)
   // The UI's own hello may have come before its window was known; this one
   // tells the host the window's UI is up.
   await host.command(windowId, { type: 'hello' })
@@ -488,6 +607,8 @@ cdp.on('Target.attachedToTarget', async ({ sessionId, targetInfo, waitingForDebu
 })
 
 cdp.on('Target.detachedFromTarget', ({ sessionId, targetId }) => {
+  if (uiSessions.has(sessionId)) debug.record('chrome', `window ${uiSessions.get(sessionId).windowId}'s UI detached`)
+  if (sessionId === bridgeSession) debug.record('chrome', 'bridge detached')
   if (uiSessions.has(sessionId)) uiTargets.delete(targetId)
   uiSessions.delete(sessionId)
   if (sessionId === bridgeSession) bridgeSession = undefined
@@ -495,23 +616,39 @@ cdp.on('Target.detachedFromTarget', ({ sessionId, targetId }) => {
 
 cdp.on('Runtime.bindingCalled', ({ name, payload }, sessionId) => {
   if (name === 'groveEmit' && sessionId === bridgeSession) {
-    host.onBridgeEvent(JSON.parse(payload))
+    const event = JSON.parse(payload)
+    debug.record('bridge', `event ${JSON.stringify(redact(event))}`)
+    host.onBridgeEvent(event)
   } else if (name === UI_BINDING && uiSessions.has(sessionId)) {
     const { windowId } = uiSessions.get(sessionId)
-    host.command(windowId, JSON.parse(payload)).catch((e) => log('command failed', e.message))
+    const command = JSON.parse(payload)
+    debug.record(`ui w${windowId}`, `command ${JSON.stringify(redact(command))}`)
+    host.command(windowId, command).catch((e) => log('command failed', e.message))
   }
 })
 
-// In --dev, the UI's and the bridge's console output and errors land here.
+// The UI's and the bridge's console output and errors: kept for a debug
+// packet, and in --dev printed here.
+const sourceOf = (sessionId) =>
+  uiSessions.has(sessionId) ? `ui w${uiSessions.get(sessionId).windowId}` : sessionId === bridgeSession ? 'bridge' : undefined
 cdp.on('Runtime.consoleAPICalled', ({ type, args }, sessionId) => {
-  if (!dev || !(uiSessions.has(sessionId) || sessionId === bridgeSession)) return
-  const text = args.map((a) => a.value ?? a.description ?? a.type).join(' ')
-  if (text.startsWith('[grove]') || type === 'error') console.log('[ui]', type, text)
+  const source = sourceOf(sessionId)
+  if (!source) return
+  const text = args
+    .map((a) => (a.value === undefined ? (a.description ?? a.type) : typeof a.value === 'string' ? a.value : JSON.stringify(a.value)))
+    .join(' ')
+  debug.record(source, type === 'log' || type === 'debug' ? text : `console.${type} ${text}`)
+  if (dev && (text.startsWith('[grove]') || type === 'error')) print('[ui]', type, text)
 })
 cdp.on('Runtime.exceptionThrown', ({ exceptionDetails: d }, sessionId) => {
-  if (dev && (uiSessions.has(sessionId) || sessionId === bridgeSession)) {
-    console.log('[ui] exception', d.exception?.description ?? d.text)
-  }
+  const source = sourceOf(sessionId)
+  if (!source) return
+  const text = d.exception?.description ?? d.text
+  debug.record(source, `exception ${text}`)
+  if (dev) print('[ui] exception', text)
+})
+cdp.on('Target.targetCrashed', ({ targetId, status, errorCode }) => {
+  debug.record('chrome', `renderer crashed: target ${targetId}, ${status} (${errorCode})`)
 })
 
 // Auto-attach doesn't always hand over the UI of windows opened later, so
@@ -602,6 +739,7 @@ async function reload(sessionId) {
   })
   await cdp.send('Page.reload', {}, sessionId)
   await loaded
+  if (debugOn) await cdp.send('Page.stopScreencast', {}, sessionId).then(() => startFrames(sessionId), () => {})
   const { result } = await cdp.send('Runtime.evaluate', { expression: '!!window.__grove', returnByValue: true }, sessionId)
   if (!result.value) await cdp.send('Runtime.evaluate', { expression: bundle }, sessionId)
 }

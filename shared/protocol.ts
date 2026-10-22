@@ -75,8 +75,12 @@ export interface GroveSettings {
   // page opened in a new tab once it loads (needs a Workers AI key). Off
   // unless the user turns it on.
   autoOrganize: boolean
+  // Debug mode: keep the last 30 seconds of Grove (a recording of its
+  // windows, its logs, the clicks and keys in its UI), for a bug button in
+  // the sidebar to save as a packet (host/debug.ts).
+  debug: boolean
 }
-export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true, unloadAfter: 20, autoOrganize: false }
+export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true, unloadAfter: 20, autoOrganize: false, debug: false }
 export const UNLOAD_CHOICES = [0, 5, 10, 20, 30, 60, 120]
 
 export interface SyncStatus {
@@ -195,6 +199,12 @@ export interface AboutInfo {
   update?: UpdateStatus
 }
 
+export interface DebugStatus {
+  saving: boolean
+  saved?: { path: string; at: number }
+  error?: string
+}
+
 export interface WindowState {
   windowId: number
   workspaces: WorkspaceSummary[]
@@ -224,6 +234,9 @@ export interface WindowState {
   translate?: TranslateStatus
   update?: UpdateStatus
   site?: SiteInfo
+  // In Debug mode: a packet being saved, the last one saved, or why it
+  // couldn't be.
+  debug?: DebugStatus
 }
 
 export type HostCommand =
@@ -270,6 +283,10 @@ export type HostCommand =
   | { type: 'deleteWorkspace'; workspaceId: string }
   | { type: 'answerPermission'; id: string; decision: PermissionDecision }
   | { type: 'setSettings'; settings: Partial<GroveSettings> }
+  // Debug mode: save the last 30 seconds as a packet, or show the saved
+  // one in its folder.
+  | { type: 'debugSave' }
+  | { type: 'debugReveal' }
   // Starts a new sync account on a server (the public one if none), with
   // an invite code if the server is invite only, or joins one with a sync
   // code.

@@ -12,6 +12,7 @@ import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protoco
 import { COLORS, MAX_SPLIT, type Group, type SplitLayout } from '../shared/types.ts'
 import settingsSvg from 'lucide-static/icons/settings.svg'
 import { Dragger } from './drag'
+import { debugButton } from './debug'
 import { downloadsButton, type Seen } from './downloads'
 import { send, subscribe } from './host-client'
 import { icons } from './icons'
@@ -377,13 +378,16 @@ class GroveSidebar extends HTMLElement {
     add.title = 'New workspace'
     add.append(svg(icons.plus))
     add.addEventListener('click', () => this.openEditor(undefined))
-    // Bottom left, as in Zen: downloads, and Grove's settings.
+    // Bottom left, as in Zen: downloads, and Grove's settings (and in Debug
+    // mode, the bug button).
     const left = el('div', 'foot-left')
     const settings = el('button', 'tbtn')
     settings.title = 'Settings'
     settings.append(svg(settingsSvg))
     settings.addEventListener('click', openSettings)
     left.append(downloadsButton(s, this.seenDownloads), settings)
+    const bug = debugButton(s)
+    if (bug) left.append(bug)
     foot.append(left, switcher, add)
     return foot
   }

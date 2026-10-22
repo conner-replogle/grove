@@ -337,6 +337,11 @@ globalThis.grove = {
     const e = await chrome.management.get(id).catch(() => undefined)
     return e ? { installType: e.installType, version: e.version, enabled: e.enabled } : null
   },
+  // Every extension, for a debug packet.
+  async extensionList() {
+    const all = await chrome.management.getAll()
+    return all.map((e) => ({ id: e.id, name: e.name, version: e.version, enabled: e.enabled, installType: e.installType }))
+  },
   async navigate({ tabId, url }) {
     return tabInfo(await chrome.tabs.update(tabId, { url, active: true }))
   },

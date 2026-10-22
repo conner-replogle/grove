@@ -785,3 +785,33 @@ webui-browser-bookmark-bar { display: none !important; }
 .grove-site-security.insecure { color: light-dark(#c5221f, #f28b82) !important; }
 .grove-site-clear.armed { color: light-dark(#c5221f, #f28b82) !important; }
 .grove-site-menu { margin-inline-start: auto; width: 34px; justify-content: center; padding: 0 !important; border-radius: 50% !important; }
+
+/* Debug mode: where the packet went. */
+.grove-debug-note {
+  position: fixed;
+  z-index: 1001;
+  left: 12px;
+  bottom: 52px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: calc(100vw - 24px);
+  padding: 8px 8px 8px 12px;
+  border-radius: 10px;
+  font: 500 12.5px system-ui, sans-serif;
+  color: light-dark(#1d1d1f, #ececef);
+  background: light-dark(rgba(250, 250, 250, 0.97), rgba(34, 34, 36, 0.97));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  animation: grove-debug-note-in 0.15s ease-out;
+}
+.grove-debug-note button {
+  border: none;
+  border-radius: 7px;
+  padding: 4px 10px;
+  font: inherit;
+  color: inherit;
+  background: light-dark(rgba(0, 0, 0, 0.07), rgba(255, 255, 255, 0.1));
+  cursor: pointer;
+}
+.grove-debug-note button:hover { background: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.16)); }
+@keyframes grove-debug-note-in { from { opacity: 0; translate: 0 4px; } }

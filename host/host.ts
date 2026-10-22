@@ -7,7 +7,7 @@
 // is instant; the idle sweep (unloadIdle) frees pages no window has shown
 // for a while. (Decision 2 had workspaces no window shows keep no pages,
 // which made every return to a workspace reload its tabs from scratch.)
-import { DEFAULT_SETTINGS, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SiteInfo, type SyncStatus, type StoreOffer, type UpdateStatus, type WindowState, type WorkersAiStatus } from '../shared/protocol.ts'
+import { DEFAULT_SETTINGS, type DebugStatus, type DownloadView, type EntryView, type HistorySuggestion, type HostCommand, type PermissionDecision, type PermissionKind, type SiteInfo, type SyncStatus, type StoreOffer, type UpdateStatus, type WindowState, type WorkersAiStatus } from '../shared/protocol.ts'
 import type { Entry, Model, Workspace } from '../shared/types.ts'
 import { HistoryIndex, type HistoryItem } from './history-index.ts'
 import * as M from './model.ts'
@@ -197,6 +197,10 @@ export class GroveHost {
   chromeVersion?: () => string
   // Quits Grove and starts it again (the launcher's).
   restart?: () => void
+  // Debug mode's packets (the launcher's: host/debug.ts): saves one and
+  // returns its path, or shows one in its folder.
+  debug?: { save(): Promise<string>; reveal(path: string): void }
+  private debugStatus: DebugStatus = { saving: false }
   // An update offer the user put away, by version, until the next launch.
   private dismissedUpdate?: string
 
@@ -685,6 +689,11 @@ export class GroveHost {
         return this.pushAll()
       case 'checkUpdates':
         return this.updates?.check()
+      case 'debugSave':
+        return this.saveDebugPacket()
+      case 'debugReveal':
+        if (this.debugStatus.saved) this.debug?.reveal(this.debugStatus.saved.path)
+        return
       case 'siteInfo':
       case 'setSiteSetting':
       case 'setKeptPermission':
@@ -749,6 +758,19 @@ export class GroveHost {
   }
 
   // The panel's view, while it's still about the window's page.
+  private async saveDebugPacket(): Promise<void> {
+    if (!this.debug || this.debugStatus.saving) return
+    this.debugStatus = { ...this.debugStatus, saving: true, error: undefined }
+    this.pushAll()
+    try {
+      const path = await this.debug.save()
+      this.debugStatus = { saving: false, saved: { path, at: Date.now() } }
+    } catch (e) {
+      this.debugStatus = { ...this.debugStatus, saving: false, error: (e as Error).message }
+    }
+    this.pushAll()
+  }
+
   private siteIn(windowId: number, b: Binding): SiteInfo | undefined {
     const info = this.siteInfos.get(windowId)
     const entry = b.activeEntryId ? this.entry(b.activeEntryId) : undefined
@@ -1467,6 +1489,7 @@ export class GroveHost {
       translate: this.translateIn(b),
       update: this.updateOffer(),
       site: this.siteIn(windowId, b),
+      debug: this.settings?.get().debug ? this.debugStatus : undefined,
       about: {
         version: this.updates?.current ?? '',
         chromium: this.chromeVersion?.(),
