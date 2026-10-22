@@ -85,6 +85,10 @@ function keepSidebarMounted(): void {
   let edge: HTMLElement | undefined
   let toggle: HTMLElement | undefined
   const anchored = new WeakSet<Element>()
+  // On macOS with the sidebar hidden, a strip above the page for the
+  // window's buttons, which stay at the top left (app.css).
+  const titlebar = document.createElement('div')
+  titlebar.className = 'grove-titlebar'
   const mount = (): boolean => {
     const app = document.querySelector<HTMLElement>('webui-browser-app')
     const root = app?.shadowRoot
@@ -96,6 +100,7 @@ function keepSidebarMounted(): void {
     if (resizer.parentNode !== grid) grid.append(resizer)
     edge ??= compactMode(app)
     if (edge.parentNode !== grid) grid.append(edge)
+    if (titlebar.parentNode !== grid) grid.append(titlebar)
     const topRow = root.querySelector('#searchBar')
     toggle ??= sidebarToggle()
     if (topRow && toggle.parentNode !== topRow) topRow.prepend(toggle)

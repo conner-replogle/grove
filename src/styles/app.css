@@ -42,6 +42,8 @@
  * over this row; its first button starts past them. (Only the buttons'
  * row: the address bar below keeps the full width.) */
 :host(.grove-mac) #groveSidebarToggle { margin-inline-start: 69px; }
+/* ...and level with them: their centers are 16px down, the row's 12px. */
+:host(.grove-mac) #searchBar { padding-top: 6.5px !important; }
 /* compact.ts's sidebar button, first in the row as in Zen; sized like
  * Webium's buttons beside it. */
 #groveSidebarToggle {
@@ -358,6 +360,24 @@ webui-browser-bookmark-bar { display: none !important; }
   translate: 0;
   visibility: visible;
 }
+/* macOS keeps the window's close/minimise/zoom buttons at the top left
+ * (Webium draws them; nothing here can move them), so with the sidebar
+ * hidden the page starts below them, and the strip they sit in drags the
+ * window, as a title bar does. */
+.grove-titlebar { display: none; }
+:host(.grove-mac.grove-compact) #main { margin-top: var(--grove-titlebar-h); }
+:host(.grove-mac.grove-compact) .grove-titlebar {
+  display: block;
+  position: fixed;
+  z-index: 8;
+  top: 0;
+  left: var(--sep);
+  right: 0;
+  height: var(--grove-titlebar-h);
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+:host(.grove-mac) { --grove-titlebar-h: 30px; }
 /* The URL bar still opens with the sidebar hidden, centered over the
  * window as for a new tab. (A hidden field couldn't take focus, and the
  * sidebar's translate would carry the fixed panel off screen.) */
