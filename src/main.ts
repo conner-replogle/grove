@@ -118,7 +118,10 @@ function keepSidebarMounted(): void {
       requestAnimationFrame(wait)
       return
     }
-    const root = document.querySelector('webui-browser-app')!.shadowRoot!
+    const app = document.querySelector('webui-browser-app')!
+    const root = app.shadowRoot!
+    // macOS draws its window controls over the sidebar's top left.
+    if (navigator.platform.startsWith('Mac')) app.classList.add('grove-mac')
     new MutationObserver(() => mount()).observe(root, { childList: true, subtree: true })
     // Grove's bundled Chromium keeps Webium's app hidden until this
     // (scripts/webium-pak.mjs), so its own UI never shows first.
