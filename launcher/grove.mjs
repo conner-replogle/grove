@@ -172,12 +172,15 @@ function prepareProfile() {
   if (prefs.browser?.enable_spellchecking === undefined) {
     prefs.browser = { ...prefs.browser, enable_spellchecking: true }
   }
-  // Zen's New Blank Window key, Ctrl/Cmd+Shift+N, for the bridge's command
-  // (Chrome won't give an extension a key of its own, incognito's here, from
-  // the manifest's suggestion), unless the user put something else on it.
-  const key = mac ? 'mac:Command+Shift+N' : `${process.platform === 'win32' ? 'windows' : 'linux'}:Ctrl+Shift+N`
+  // Zen's keys for a new blank window and a private one, Ctrl/Cmd+Shift+N
+  // and +P, for the bridge's commands (Chrome won't give an extension a key
+  // of its own, incognito's here, from the manifest's suggestion), unless
+  // the user put something else on them.
   const commands = (prefs.extensions = { ...prefs.extensions, commands: { ...prefs.extensions?.commands } }).commands
-  if (!commands[key]) commands[key] = { command_name: 'new-blank-window', extension: unpackedId(BRIDGE_DIR), global: false }
+  for (const [letter, command_name] of [['N', 'new-blank-window'], ['P', 'new-private-window']]) {
+    const key = mac ? `mac:Command+Shift+${letter}` : `${process.platform === 'win32' ? 'windows' : 'linux'}:Ctrl+Shift+${letter}`
+    if (!commands[key]) commands[key] = { command_name, extension: unpackedId(BRIDGE_DIR), global: false }
+  }
   writeFileSync(file, JSON.stringify(prefs))
 }
 
@@ -229,7 +232,6 @@ const chromeArgs = mergeFlags([
     ...userFlags(),
     `--user-data-dir=${PROFILE}`,
     `--enable-features=${FEATURES}`,
-    `--load-extension=${EXTENSION}`,
     '--remote-debugging-pipe',
     '--ozone-platform-hint=auto',
     '--no-first-run',
@@ -267,6 +269,13 @@ chrome.on('exit', (code) => {
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => chrome.kill('SIGTERM'))
 
 const cdp = new PipeCDP(chrome.stdio[3], chrome.stdio[4])
+
+// The bridge, loaded over DevTools rather than with --load-extension: only
+// this way can it be allowed in incognito, where it runs private windows'
+// tabs too (as one extension "spanning" both).
+await cdp
+  .send('Extensions.loadUnpacked', { path: EXTENSION, enableInIncognito: true })
+  .catch((e) => console.error('[grove] the bridge extension failed to load:', e.message))
 
 // The site permissions Grove keeps itself, applied before any page asks.
 const sitePermissions = new SitePermissions(join(PROFILE, 'grove-permissions.json'), (permission, setting, origin) =>

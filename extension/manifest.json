@@ -64,6 +64,14 @@
         "mac": "Command+Shift+N"
       },
       "description": "New blank window"
+    },
+    "new-private-window": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+P",
+        "mac": "Command+Shift+P"
+      },
+      "description": "New private window"
     }
-  }
+  },
+  "incognito": "spanning"
 }

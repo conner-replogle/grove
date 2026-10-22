@@ -620,3 +620,5 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 }
 .workspace-indicator.blank .move-to svg { width: 14px; height: 14px; }
 .workspace-indicator.blank .move-to:hover { opacity: 1; background: var(--tab-background-color-hover); }
+.workspace-indicator.blank .pill:has(svg) { display: flex; align-items: center; gap: 4px; }
+.workspace-indicator.blank .pill svg { width: 12px; height: 12px; }

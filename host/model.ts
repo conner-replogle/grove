@@ -18,12 +18,15 @@ function newWorkspace(name: string, color: WorkspaceColor): Workspace {
   return { id: newId(), name, color, entries: [], groups: [] }
 }
 
-// Zen's blank windows are indigo.
+// Zen's blank windows are indigo; private ones, purple.
 export const BLANK_COLOR = '#6366f1'
+export const PRIVATE_COLOR = '#8b3fd9'
 
-// A blank window's workspace (see Workspace.blank).
-export function createBlankWorkspace(model: Model): [Model, string] {
-  const ws: Workspace = { ...newWorkspace('Blank Window', BLANK_COLOR), blank: true }
+// A blank window's workspace (see Workspace.blank), or a private window's.
+export function createBlankWorkspace(model: Model, isPrivate = false): [Model, string] {
+  const ws: Workspace = isPrivate
+    ? { ...newWorkspace('Private', PRIVATE_COLOR), blank: true, private: true }
+    : { ...newWorkspace('Blank Window', BLANK_COLOR), blank: true }
   return [{ ...model, workspaces: [...model.workspaces, ws] }, ws.id]
 }
 

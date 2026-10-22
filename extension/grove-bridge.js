@@ -22,7 +22,8 @@ const tabInfo = (t) => ({
   favIconUrl: t.favIconUrl || '',
   status: t.status || '',
   audible: !!t.audible,
-  openerTabId: t.openerTabId
+  openerTabId: t.openerTabId,
+  incognito: t.incognito || undefined
 })
 
 // Popup and app windows (Grove's own device and screen-share pickers among
@@ -105,15 +106,17 @@ chrome.windows.onCreated.addListener((w) => {
   if (w.type !== 'normal') return otherWindows.add(w.id)
   const asked = groveWindows.shift()
   if (asked?.requestId) pending.set(w.id, [asked.requestId])
-  emit({ type: 'windowCreated', windowId: w.id, grove: asked ? true : undefined })
+  emit({ type: 'windowCreated', windowId: w.id, grove: asked ? true : undefined, incognito: w.incognito || undefined })
 })
 chrome.windows.onRemoved.addListener((windowId) => {
   if (!otherWindows.delete(windowId)) emit({ type: 'windowRemoved', windowId })
 })
 // Zen's shortcut for a new blank window (Ctrl/Cmd+Shift+N): the host makes
 // it blank, as a window Grove asked for.
+// And for a private window, Zen's Ctrl/Cmd+Shift+P.
 chrome.commands.onCommand.addListener((command) => {
   if (command === 'new-blank-window') void globalThis.grove.newWindow({ url: 'chrome://newtab/' })
+  if (command === 'new-private-window') void chrome.windows.create({ incognito: true })
 })
 // The computer going idle (no input for a couple of minutes) or locked:
 // the host organizes tabs then (host/organize.ts).
@@ -202,7 +205,8 @@ const downloadInfo = async (d) => {
     exists: d.exists,
     error: d.error,
     startTime: d.startTime,
-    icon
+    icon,
+    incognito: d.incognito || undefined
   }
 }
 const emitDownload = async (id) => {
@@ -304,7 +308,7 @@ globalThis.grove = {
   },
   async snapshot() {
     const windows = await chrome.windows.getAll({ populate: true, windowTypes: ['normal'] })
-    return windows.map((w) => ({ id: w.id, focused: w.focused, tabs: w.tabs.map(tabInfo) }))
+    return windows.map((w) => ({ id: w.id, focused: w.focused, incognito: w.incognito || undefined, tabs: w.tabs.map(tabInfo) }))
   },
   async create({ windowId, url, active = true, requestId }) {
     if (requestId) {
@@ -316,10 +320,11 @@ globalThis.grove = {
   },
   // A new window: with an existing tab moved into it, or a new one at
   // `url` (whose onCreated carries requestId). At a screen point, if given.
-  async newWindow({ tabId, url, left, top, requestId }) {
+  // `incognito`: a private window (a tab moved in keeps its own kind).
+  async newWindow({ tabId, url, left, top, requestId, incognito }) {
     const asked = { requestId }
     groveWindows.push(asked)
-    const options = { type: 'normal', focused: true, ...(tabId === undefined ? { url } : { tabId }) }
+    const options = { type: 'normal', focused: true, ...(tabId === undefined ? { url, incognito: !!incognito } : { tabId }) }
     if (left !== undefined && top !== undefined) Object.assign(options, { left: Math.round(left), top: Math.round(top) })
     try {
       // A point too near the screen's edge for the window: where Chrome
@@ -529,15 +534,17 @@ globalThis.grove = {
 
   // The site's settings that differ from the defaults (the ones it was
   // given), by contentSettings name, and whether the page is bookmarked.
-  async siteInfo({ origin, url, tabId }) {
+  // `incognito`: the private window's own settings (they last until its
+  // session ends).
+  async siteInfo({ origin, url, tabId, incognito = false }) {
     const settings = []
     if (/^https?:/.test(origin)) {
       for (const name of SITE_SETTINGS) {
         const api = chrome.contentSettings[name]
         if (!api) continue
         const [own, usual] = await Promise.all([
-          api.get({ primaryUrl: `${origin}/` }).catch(() => undefined),
-          api.get({ primaryUrl: 'https://grove-default.invalid/' }).catch(() => undefined)
+          api.get({ primaryUrl: `${origin}/`, incognito }).catch(() => undefined),
+          api.get({ primaryUrl: 'https://grove-default.invalid/', incognito }).catch(() => undefined)
         ])
         if (own && usual && own.setting !== usual.setting) settings.push({ name, setting: own.setting })
       }
@@ -552,9 +559,10 @@ globalThis.grove = {
         .catch(() => false))
     return { settings, bookmarked: marks.length > 0, reader }
   },
-  async setSiteSetting({ origin, name, setting }) {
+  async setSiteSetting({ origin, name, setting, incognito = false }) {
     if (!SITE_SETTINGS.includes(name)) return
-    await chrome.contentSettings[name].set({ primaryPattern: `${origin}/*`, setting })
+    const scope = incognito ? 'incognito_session_only' : 'regular'
+    await chrome.contentSettings[name].set({ primaryPattern: `${origin}/*`, setting, scope })
   },
   // Bookmarks the page, or removes its bookmarks; whether it's bookmarked now.
   async toggleBookmark({ url, title }) {

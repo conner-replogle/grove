@@ -15,6 +15,7 @@
 import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protocol.ts'
 import { COLORS, MAX_SPLIT, type Group, type SplitLayout } from '../shared/types.ts'
 import folderInputSvg from 'lucide-static/icons/folder-input.svg'
+import privateSvg from 'lucide-static/icons/venetian-mask.svg'
 import settingsSvg from 'lucide-static/icons/settings.svg'
 import { Dragger } from './drag'
 import { debugButton } from './debug'
@@ -158,9 +159,16 @@ class GroveSidebar extends HTMLElement {
   }
 
   // Zen's blank window: its name in a pill, and Move to, which sends the
-  // window's tabs to a workspace (and closes the window).
+  // window's tabs to a workspace (and closes the window). A private window
+  // has only its name: its tabs stay private.
   private blankIndicator(s: WindowState): HTMLElement {
     const indicator = el('div', 'workspace-indicator blank')
+    if (s.private) {
+      const pill = el('span', 'pill')
+      pill.append(svg(privateSvg), el('span', '', 'Private'))
+      indicator.append(pill)
+      return indicator
+    }
     const move = el('button', 'move-to')
     move.title = "Move this window's tabs to a workspace"
     move.append(svg(folderInputSvg), el('span', '', 'Move to'))
@@ -263,7 +271,8 @@ class GroveSidebar extends HTMLElement {
     row.dataset.kind = 'tab'
     row.dataset.section = section
     if (e.groupId) row.dataset.group = e.groupId
-    const others = s.workspaces.filter((w) => w.id !== s.workspace.id)
+    // A private window's tabs stay in private windows.
+    const others = s.private ? [] : s.workspaces.filter((w) => w.id !== s.workspace.id)
     // A blank window's only tab is in a window of its own already.
     const ownWindow = !s.blank || s.workspace.entries.length > 1
     this.wire(row, e, [
@@ -279,7 +288,7 @@ class GroveSidebar extends HTMLElement {
       ...others.map((w): MenuItem => [`Move to ${w.name}`, () => send({ type: 'moveToWorkspace', entryId: e.id, workspaceId: w.id })]),
       ...(ownWindow ? [['Move to new window', () => send({ type: 'tearOff', entryId: e.id })] as MenuItem] : []),
       'separator',
-      ...unloadItem(e),
+      ...unloadItem(e, s),
       ['Close', () => send({ type: 'close', entryId: e.id })]
     ])
     return row
@@ -434,6 +443,7 @@ class GroveSidebar extends HTMLElement {
     return [
       ['Edit workspace…', () => this.openEditor(w)],
       ['New blank window', () => send({ type: 'newBlankWindow' })],
+      ['New private window', () => send({ type: 'newPrivateWindow' })],
       ...(s.workspaces.length > 1
         ? (['separator', ['Delete workspace', () => send({ type: 'deleteWorkspace', workspaceId: w.id })]] as MenuItem[])
         : [])
@@ -540,8 +550,8 @@ function favicon(e: EntryView): HTMLElement {
 customElements.define('grove-sidebar', GroveSidebar)
 
 // Unloading frees a page's memory; selecting the tab reopens it as it was.
-function unloadItem(e: EntryView): MenuItem[] {
-  return e.live ? [['Unload tab', () => send({ type: 'unload', entryId: e.id })]] : []
+function unloadItem(e: EntryView, s?: WindowState): MenuItem[] {
+  return e.live && !s?.private ? [['Unload tab', () => send({ type: 'unload', entryId: e.id })]] : []
 }
 
 function tabCount(n: number): string {

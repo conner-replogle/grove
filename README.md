@@ -91,6 +91,12 @@ window", with Ctrl/Cmd+Shift+N (or "New blank window" on a workspace's
 menu), or by opening a link in a new window. Its "Move to" button sends
 its tabs to a workspace.
 
+Private (incognito) windows, Ctrl/Cmd+Shift+P as in Zen, are blank
+windows too, in purple: only their own tabs, which stay in private windows,
+are never unloaded, saved or synced, and keep their own site settings and
+downloads. (The bridge extension is loaded over DevTools so it can run
+there: `--load-extension` can't allow an extension in incognito.)
+
 It's end-to-end encrypted: the server (`sync-worker/`, a Cloudflare Worker
 with one Durable Object per account) only stores sealed change batches and
 hands them on; devices do all merging. One secret gives each device the

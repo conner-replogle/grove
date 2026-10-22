@@ -315,7 +315,8 @@ export function showSitePanel(): void {
       if (!button) return
       void anchorAt(opener, 'kToolbarAppMenuButtonElementId', undefined, 0, button).then(() => button.click())
     })
-    foot.append(security, clear, menu)
+    // A private window's sites keep nothing past it.
+    foot.append(...(state?.private ? [security, menu] : [security, clear, menu]))
     panel.append(foot)
   }
 

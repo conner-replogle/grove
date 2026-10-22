@@ -92,6 +92,9 @@ export interface Workspace {
   // user's workspaces. It has no pins, folders or Essentials, is never
   // saved or synced, and goes when its window closes.
   blank?: true
+  // A private (incognito) window's: blank, and its tabs can't leave it for
+  // a workspace.
+  private?: true
 }
 
 export interface Model {

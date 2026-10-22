@@ -31,6 +31,7 @@ export interface BridgeTab {
   status: string
   audible: boolean
   openerTabId?: number
+  incognito?: boolean
 }
 
 export type BridgeEvent =
@@ -42,7 +43,7 @@ export type BridgeEvent =
   | { type: 'tabAttached'; tabId: number; windowId: number }
   | { type: 'tabMoved'; tabId: number; windowId: number }
   // `grove`: the window Grove itself asked for (newWindow).
-  | { type: 'windowCreated'; windowId: number; grove?: boolean }
+  | { type: 'windowCreated'; windowId: number; grove?: boolean; incognito?: boolean }
   | { type: 'windowRemoved'; windowId: number }
   | { type: 'permissionRequest'; id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }
   | { type: 'download'; download: DownloadView; created?: boolean }
@@ -114,6 +115,9 @@ interface Binding {
 
 const NEW_TAB_URL = 'chrome://newtab/'
 const BLANK_REFUSES = new Set<HostCommand['type']>(['setPinned', 'setEssential', 'newFolder', 'setFolderPinned', 'organize', 'switchWorkspace'])
+// A private window's tabs stay in private windows, and stay open: Chrome
+// can't be counted on to give an unloaded one back.
+const PRIVATE_REFUSES = new Set<HostCommand['type']>(['moveToWorkspace', 'moveWindowTo', 'unload', 'newWorkspace'])
 const originOf = (url: string): string | undefined => {
   try {
     return new URL(url).origin
@@ -186,6 +190,8 @@ export class GroveHost {
   private readonly freshWindows = new Set<number>()
   // Blank windows Grove is closing (their last tab went).
   private readonly closingWindows = new Set<number>()
+  // Private (incognito) windows.
+  private readonly incognito = new Set<number>()
   // A window's next new tab joins this entry in a split (splitNextTab).
   private splitNext?: { windowId: number; entryId: string; at: number }
   // Tabs whose page has drawn (or finished loading); see EntryView.painted.
@@ -233,8 +239,18 @@ export class GroveHost {
     this.bridge = bridge
     this.translation = new PageTranslation(bridge, () => this.queuePush())
     void this.translation.init()
-    const windows = await bridge.call<{ id: number; tabs: BridgeTab[] }[]>('snapshot')
+    const windows = await bridge.call<{ id: number; incognito?: boolean; tabs: BridgeTab[] }[]>('snapshot')
     for (const w of windows) {
+      if (w.incognito) {
+        // (A private window from before a host restart.)
+        this.incognito.add(w.id)
+        this.makeBlank(w.id)
+        for (const tab of w.tabs) {
+          this.tabWindow.set(tab.id, w.id)
+          this.adoptTab(tab)
+        }
+        continue
+      }
       const ws = M.getWorkspace(this.model, this.model.lastActiveWorkspaceId)
       this.windows.set(w.id, { workspaceId: ws.id, activeEntryId: ws.activeEntryId })
       const stray: number[] = []
@@ -304,7 +320,9 @@ export class GroveHost {
         // Grove's own new windows are blank; the user's (Ctrl+N) show a
         // workspace, unless they open with a page (a link opened in a new
         // window), which makes them blank too.
-        if (e.grove) this.makeBlank(e.windowId)
+        if (e.incognito) this.incognito.add(e.windowId)
+        // A private window is blank (a workspace's tabs can't go there).
+        if (e.grove || e.incognito) this.makeBlank(e.windowId)
         else {
           this.bindWindow(e.windowId)
           // (Unless its first tab has come already.)
@@ -319,6 +337,7 @@ export class GroveHost {
         this.windows.delete(e.windowId)
         this.freshWindows.delete(e.windowId)
         this.closingWindows.delete(e.windowId)
+        this.incognito.delete(e.windowId)
         if (ws) {
           ws.entries.forEach((x) => this.unmap(x.id))
           this.closeEntries(ws.entries.map((x) => x.id))
@@ -583,6 +602,7 @@ export class GroveHost {
     // A blank window has no pins, Essentials or folders.
     if (this.blankOf(windowId) && BLANK_REFUSES.has(c.type)) return
     if (c.type === 'moveEntry' && c.section !== 'tabs' && this.blankOf(windowId)) return
+    if (this.blankOf(windowId)?.private && PRIVATE_REFUSES.has(c.type)) return
     switch (c.type) {
       case 'hello':
         this.uiReady.add(windowId)
@@ -675,6 +695,8 @@ export class GroveHost {
       }
       case 'newBlankWindow':
         return void (await this.bridge?.call('newWindow', { url: NEW_TAB_URL }).catch((e: unknown) => this.log('new window', e)))
+      case 'newPrivateWindow':
+        return void (await this.bridge?.call('newWindow', { url: NEW_TAB_URL, incognito: true }).catch((e: unknown) => this.log('new window', e)))
       case 'tearOff':
         return this.tearOff(windowId, c.entryId, c.x, c.y)
       case 'moveWindowTo':
@@ -771,7 +793,7 @@ export class GroveHost {
     const had = this.blankOf(windowId)
     if (had) return had.id
     let id!: string
-    this.update((m) => ([m, id] = M.createBlankWorkspace(m))[0])
+    this.update((m) => ([m, id] = M.createBlankWorkspace(m, this.incognito.has(windowId)))[0])
     const b = this.bindWindow(windowId)
     b.workspaceId = id
     b.activeEntryId = undefined
@@ -797,7 +819,10 @@ export class GroveHost {
     const at = x !== undefined && y !== undefined ? { left: x - 120, top: y - 16 } : {}
     if (at.left !== undefined && windowsHavePlaces()) {
       const under = await bridge.call<number | null>('windowAt', { x, y, except: windowId }).catch(() => null)
-      if (under !== null && this.windows.has(under)) return this.moveToWindow(entryId, under)
+      // (Private tabs only go to private windows, and others never there.)
+      if (under !== null && this.windows.has(under) && this.incognito.has(under) === this.incognito.has(windowId)) {
+        return this.moveToWindow(entryId, under)
+      }
     }
     // A blank window's only tab is in a window of its own already.
     if (found.workspace.blank && found.workspace.entries.length === 1) return
@@ -812,7 +837,7 @@ export class GroveHost {
       const requestId = `r${this.nextRequest++}`
       this.requests.set(requestId, { entryId })
       created = await bridge
-        .call<number>('newWindow', { url: found.entry.url || NEW_TAB_URL, requestId, ...at })
+        .call<number>('newWindow', { url: found.entry.url || NEW_TAB_URL, requestId, incognito: this.incognito.has(windowId), ...at })
         .catch((e: unknown) => void this.log('tear off', e))
       if (created === undefined) this.requests.delete(requestId)
     }
@@ -907,7 +932,7 @@ export class GroveHost {
     try {
       switch (c.type) {
         case 'setSiteSetting':
-          await this.bridge.call('setSiteSetting', { origin, name: c.name, setting: c.setting })
+          await this.bridge.call('setSiteSetting', { origin, name: c.name, setting: c.setting, incognito: this.incognito.has(windowId) })
           break
         case 'setKeptPermission':
           await this.sitePermissions?.set(origin, c.kind, c.setting)
@@ -925,6 +950,8 @@ export class GroveHost {
           break
         }
         case 'clearSiteData':
+          // A private window's sites keep nothing past it anyway.
+          if (this.incognito.has(windowId)) break
           await this.bridge.call('clearSiteData', { origin, tabId })
           break
       }
@@ -933,13 +960,15 @@ export class GroveHost {
       this.log('site panel', c.type, notice)
     }
     const info = await this.bridge
-      .call<{ settings: SiteInfo['settings']; bookmarked: boolean; reader: boolean }>('siteInfo', { origin, url, tabId })
+      .call<{ settings: SiteInfo['settings']; bookmarked: boolean; reader: boolean }>('siteInfo', { origin, url, tabId, incognito: this.incognito.has(windowId) })
       .catch(() => ({ settings: [], bookmarked: false, reader: false }))
     this.siteInfos.set(windowId, {
       url,
       origin,
       settings: info.settings,
-      kept: this.sitePermissions?.forOrigin(origin) ?? [],
+      // (Grove keeps permissions for the user's own profile, not private
+      // windows'.)
+      kept: this.incognito.has(windowId) ? [] : (this.sitePermissions?.forOrigin(origin) ?? []),
       bookmarked: info.bookmarked,
       reader: info.reader,
       notice
@@ -947,7 +976,6 @@ export class GroveHost {
     this.push(windowId)
   }
 
-  // The panel's view, while it's still about the window's page.
   private async saveDebugPacket(): Promise<void> {
     if (!this.debug || this.debugStatus.saving) return
     this.debugStatus = { ...this.debugStatus, saving: true, error: undefined }
@@ -961,6 +989,7 @@ export class GroveHost {
     this.pushAll()
   }
 
+  // The panel's view, while it's still about the window's page.
   private siteIn(windowId: number, b: Binding): SiteInfo | undefined {
     const info = this.siteInfos.get(windowId)
     const entry = b.activeEntryId ? this.entry(b.activeEntryId) : undefined
@@ -1316,6 +1345,8 @@ export class GroveHost {
     const now = Date.now()
     const idle: string[] = []
     for (const [entryId, tabId] of this.tabOf) {
+      // Private tabs stay open (see PRIVATE_REFUSES).
+      if (M.workspaceOfEntry(this.model, entryId)?.private) continue
       const since = this.shownAt.get(tabId)
       if (since === undefined) this.shownAt.set(tabId, now)
       else if (now - since >= minutes * 60_000 && !this.audible.has(tabId) && !this.permissions.some((p) => p.tabId === tabId)) {
@@ -1684,7 +1715,8 @@ export class GroveHost {
       permission: this.permissionIn(windowId, b),
       settings: this.settings?.get() ?? DEFAULT_SETTINGS,
       sync: this.sync?.status() ?? { state: 'off', pending: 0 },
-      downloads: this.downloads,
+      downloads: this.downloads.filter((d) => !!d.incognito === !!ws.private),
+      private: ws.private,
       organize: { available: !ws.blank && !!this.workersAi?.status().accountId, busy: this.organizing.has(ws.id), error: this.organizeError },
       workersAi: this.workersAi?.status() ?? {},
       store: this.storeIn(b),

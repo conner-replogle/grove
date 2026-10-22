@@ -167,6 +167,8 @@ export interface DownloadView {
   exists: boolean
   error?: string
   startTime: string
+  // Downloaded in a private window (shown only in those).
+  incognito?: boolean
   // The system's icon for the file, as a data URL.
   icon?: string
 }
@@ -211,8 +213,10 @@ export interface WindowState {
   workspace: WorkspaceSummary & { entries: EntryView[]; groups: Group[] }
   // Shared by every workspace (none in a blank window).
   essentials: EntryView[]
-  // A blank window (Zen's): its own tabs, not one of the workspaces.
+  // A blank window (Zen's): its own tabs, not one of the workspaces. A
+  // private (incognito) window is one too.
   blank?: boolean
+  private?: boolean
   // The window's entry is showing in another window: this one keeps it
   // selected, greyed out over a snapshot of how it last looked here.
   paused?: { entryId: string; title: string; snapshot?: string }
@@ -284,6 +288,7 @@ export type HostCommand =
   // the window and dropped at screen point x, y, or from its menu); or send
   // a blank window's tabs to a workspace, in a window showing it.
   | { type: 'newBlankWindow' }
+  | { type: 'newPrivateWindow' }
   | { type: 'tearOff'; entryId: string; x?: number; y?: number }
   | { type: 'moveWindowTo'; workspaceId: string }
   | { type: 'newWorkspace'; name?: string; color?: WorkspaceColor; icon?: string }
