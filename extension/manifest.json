@@ -56,5 +56,14 @@
       "run_at": "document_idle",
       "all_frames": true
     }
-  ]
+  ],
+  "commands": {
+    "new-blank-window": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+N",
+        "mac": "Command+Shift+N"
+      },
+      "description": "New blank window"
+    }
+  }
 }

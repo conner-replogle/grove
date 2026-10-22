@@ -8,8 +8,13 @@
 // separator, New Tab and its other tabs and folders (Grove's own: Chrome's
 // tab groups only live inside one window). The workspace icons sit at the
 // bottom.
+//
+// A blank window (Zen's) shows only its own tabs: no Essentials, pins,
+// folders or workspace icons, and a Move to button that sends its tabs to a
+// workspace.
 import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protocol.ts'
 import { COLORS, MAX_SPLIT, type Group, type SplitLayout } from '../shared/types.ts'
+import folderInputSvg from 'lucide-static/icons/folder-input.svg'
 import settingsSvg from 'lucide-static/icons/settings.svg'
 import { Dragger } from './drag'
 import { debugButton } from './debug'
@@ -90,17 +95,7 @@ class GroveSidebar extends HTMLElement {
     const app = (this.getRootNode() as ShadowRoot).host
     if (app) applyWorkspaceTheme(app, colorHex(ws.color))
 
-    const indicator = el('div', 'workspace-indicator')
-    indicator.dataset.kind = 'pins-start'
-    const wsIcon = el('span', 'icon')
-    wsIcon.append(workspaceIcon(ws.icon))
-    indicator.append(wsIcon, el('span', 'name', ws.name))
-    indicator.addEventListener('dblclick', () => this.openEditor(ws))
-    indicator.addEventListener('contextmenu', (ev) => {
-      ev.preventDefault()
-      this.openMenu(ev, this.workspaceMenu(ws, s))
-    })
-    scroll.append(indicator)
+    scroll.append(s.blank ? this.blankIndicator(s) : this.indicator(s))
 
     const pinned = ws.entries.filter((e) => e.pinned)
     const tabs = ws.entries.filter((e) => !e.pinned)
@@ -145,6 +140,40 @@ class GroveSidebar extends HTMLElement {
 
     this.body.replaceChildren(...[scroll, updateNotice(s.update), this.foot(s)].filter((n): n is HTMLElement => !!n))
     scroll.scrollTop = scrollTop
+  }
+
+  private indicator(s: WindowState): HTMLElement {
+    const ws = s.workspace
+    const indicator = el('div', 'workspace-indicator')
+    indicator.dataset.kind = 'pins-start'
+    const wsIcon = el('span', 'icon')
+    wsIcon.append(workspaceIcon(ws.icon))
+    indicator.append(wsIcon, el('span', 'name', ws.name))
+    indicator.addEventListener('dblclick', () => this.openEditor(ws))
+    indicator.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault()
+      this.openMenu(ev, this.workspaceMenu(ws, s))
+    })
+    return indicator
+  }
+
+  // Zen's blank window: its name in a pill, and Move to, which sends the
+  // window's tabs to a workspace (and closes the window).
+  private blankIndicator(s: WindowState): HTMLElement {
+    const indicator = el('div', 'workspace-indicator blank')
+    const move = el('button', 'move-to')
+    move.title = "Move this window's tabs to a workspace"
+    move.append(svg(folderInputSvg), el('span', '', 'Move to'))
+    move.addEventListener('click', (ev) => {
+      ev.stopPropagation()
+      this.openMenu(ev, [
+        ...s.workspaces.map((w): MenuItem => [w.name, () => send({ type: 'moveWindowTo', workspaceId: w.id })]),
+        'separator',
+        ['New workspace…', () => this.openEditor(undefined)]
+      ])
+    })
+    indicator.append(el('span', 'pill', 'Blank Window'), move)
+    return indicator
   }
 
   // One section's rows: its loose tabs and splits, and a box for each folder.
@@ -235,13 +264,20 @@ class GroveSidebar extends HTMLElement {
     row.dataset.section = section
     if (e.groupId) row.dataset.group = e.groupId
     const others = s.workspaces.filter((w) => w.id !== s.workspace.id)
+    // A blank window's only tab is in a window of its own already.
+    const ownWindow = !s.blank || s.workspace.entries.length > 1
     this.wire(row, e, [
       ...this.splitItems(e, s),
-      ['Add to Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: true })],
-      [e.pinned ? 'Unpin from workspace' : 'Pin to workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: !e.pinned })],
-      ...(e.groupId ? [] : [['Add to new folder', () => send({ type: 'newFolder', entryId: e.id })] as MenuItem]),
-      ...(others.length ? (['separator'] as MenuItem[]) : []),
+      ...(s.blank
+        ? []
+        : ([
+            ['Add to Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: true })],
+            [e.pinned ? 'Unpin from workspace' : 'Pin to workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: !e.pinned })],
+            ...(e.groupId ? [] : [['Add to new folder', () => send({ type: 'newFolder', entryId: e.id })] as MenuItem])
+          ] as MenuItem[])),
+      ...(others.length || ownWindow ? (['separator'] as MenuItem[]) : []),
       ...others.map((w): MenuItem => [`Move to ${w.name}`, () => send({ type: 'moveToWorkspace', entryId: e.id, workspaceId: w.id })]),
+      ...(ownWindow ? [['Move to new window', () => send({ type: 'tearOff', entryId: e.id })] as MenuItem] : []),
       'separator',
       ...unloadItem(e),
       ['Close', () => send({ type: 'close', entryId: e.id })]
@@ -388,13 +424,16 @@ class GroveSidebar extends HTMLElement {
     left.append(downloadsButton(s, this.seenDownloads), settings)
     const bug = debugButton(s)
     if (bug) left.append(bug)
-    foot.append(left, switcher, add)
+    // A blank window has no workspaces of its own to switch between.
+    if (s.blank) foot.append(left)
+    else foot.append(left, switcher, add)
     return foot
   }
 
   private workspaceMenu(w: WorkspaceSummary, s: WindowState): MenuItem[] {
     return [
       ['Edit workspace…', () => this.openEditor(w)],
+      ['New blank window', () => send({ type: 'newBlankWindow' })],
       ...(s.workspaces.length > 1
         ? (['separator', ['Delete workspace', () => send({ type: 'deleteWorkspace', workspaceId: w.id })]] as MenuItem[])
         : [])

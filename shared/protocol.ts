@@ -209,8 +209,10 @@ export interface WindowState {
   windowId: number
   workspaces: WorkspaceSummary[]
   workspace: WorkspaceSummary & { entries: EntryView[]; groups: Group[] }
-  // Shared by every workspace.
+  // Shared by every workspace (none in a blank window).
   essentials: EntryView[]
+  // A blank window (Zen's): its own tabs, not one of the workspaces.
+  blank?: boolean
   // The window's entry is showing in another window: this one keeps it
   // selected, greyed out over a snapshot of how it last looked here.
   paused?: { entryId: string; title: string; snapshot?: string }
@@ -278,6 +280,12 @@ export type HostCommand =
   | { type: 'setSplitLayout'; splitId: string; layout: SplitLayout | SplitNode }
   | { type: 'moveWorkspace'; workspaceId: string; beforeId?: string }
   | { type: 'switchWorkspace'; workspaceId: string }
+  // Zen's blank windows: open one; move a tab into a new one (dragged off
+  // the window and dropped at screen point x, y, or from its menu); or send
+  // a blank window's tabs to a workspace, in a window showing it.
+  | { type: 'newBlankWindow' }
+  | { type: 'tearOff'; entryId: string; x?: number; y?: number }
+  | { type: 'moveWindowTo'; workspaceId: string }
   | { type: 'newWorkspace'; name?: string; color?: WorkspaceColor; icon?: string }
   | { type: 'editWorkspace'; workspaceId: string; name?: string; color?: WorkspaceColor; icon?: string }
   | { type: 'deleteWorkspace'; workspaceId: string }

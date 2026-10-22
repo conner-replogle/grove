@@ -88,6 +88,10 @@ export interface Workspace {
   // order, in the same section and folder; Essentials are never split.
   splits?: Split[]
   activeEntryId?: string
+  // A blank window's own tabs (Zen's New Blank Window): not one of the
+  // user's workspaces. It has no pins, folders or Essentials, is never
+  // saved or synced, and goes when its window closes.
+  blank?: true
 }
 
 export interface Model {

@@ -18,6 +18,23 @@ function newWorkspace(name: string, color: WorkspaceColor): Workspace {
   return { id: newId(), name, color, entries: [], groups: [] }
 }
 
+// Zen's blank windows are indigo.
+export const BLANK_COLOR = '#6366f1'
+
+// A blank window's workspace (see Workspace.blank).
+export function createBlankWorkspace(model: Model): [Model, string] {
+  const ws: Workspace = { ...newWorkspace('Blank Window', BLANK_COLOR), blank: true }
+  return [{ ...model, workspaces: [...model.workspaces, ws] }, ws.id]
+}
+
+// The user's workspaces: all but blank windows'.
+export const realWorkspaces = (model: Model): Workspace[] => model.workspaces.filter((w) => !w.blank)
+
+// The model as it's saved and synced: without blank windows' workspaces.
+export function withoutBlank(model: Model): Model {
+  return model.workspaces.some((w) => w.blank) ? { ...model, workspaces: realWorkspaces(model) } : model
+}
+
 export function getWorkspace(model: Model, id: string): Workspace {
   const ws = model.workspaces.find((w) => w.id === id)
   if (!ws) throw new Error(`no workspace ${id}`)
@@ -38,12 +55,11 @@ function nextColor(used: string[]): Color {
 }
 
 export function createWorkspace(model: Model, name?: string, color?: WorkspaceColor, icon?: string): [Model, string] {
-  const ws = newWorkspace(
-    name?.trim() || `Workspace ${model.workspaces.length + 1}`,
-    color ?? nextColor(model.workspaces.map((w) => w.color))
-  )
+  const real = realWorkspaces(model)
+  const ws = newWorkspace(name?.trim() || `Workspace ${real.length + 1}`, color ?? nextColor(real.map((w) => w.color)))
   if (icon?.trim()) ws.icon = icon.trim()
-  return [{ ...model, workspaces: [...model.workspaces, ws] }, ws.id]
+  // Before blank windows' workspaces, which come last.
+  return [{ ...model, workspaces: [...real, ws, ...model.workspaces.filter((w) => w.blank)] }, ws.id]
 }
 
 export interface WorkspacePatch {
@@ -84,24 +100,26 @@ export function moveWorkspace(model: Model, id: string, toIndex: number): Model 
   return { ...model, workspaces: [...rest.slice(0, index), ws, ...rest.slice(index)] }
 }
 
-// The last workspace can't be deleted. Its tabs go with it.
+// The last workspace can't be deleted. Its tabs go with it. (A blank
+// window's goes whenever its window closes.)
 export function deleteWorkspace(model: Model, id: string): Model {
-  if (model.workspaces.length <= 1) return model
-  const index = model.workspaces.findIndex((w) => w.id === id)
-  if (index < 0) return model
-  const workspaces = model.workspaces.filter((w) => w.id !== id)
+  const real = realWorkspaces(model)
+  const index = real.findIndex((w) => w.id === id)
+  if (index < 0) return { ...model, workspaces: model.workspaces.filter((w) => w.id !== id) }
+  if (real.length <= 1) return model
+  const rest = real.filter((w) => w.id !== id)
   const lastActiveWorkspaceId =
-    model.lastActiveWorkspaceId === id
-      ? workspaces[Math.min(index, workspaces.length - 1)].id
-      : model.lastActiveWorkspaceId
-  return { ...model, workspaces, lastActiveWorkspaceId }
+    model.lastActiveWorkspaceId === id ? rest[Math.min(index, rest.length - 1)].id : model.lastActiveWorkspaceId
+  return { ...model, workspaces: model.workspaces.filter((w) => w.id !== id), lastActiveWorkspaceId }
 }
 
-// The workspace `offset` places away from `id`, wrapping around.
+// The workspace `offset` places away from `id`, wrapping around (blank
+// windows' aside).
 export function neighborWorkspace(model: Model, id: string, offset: number): string {
-  const n = model.workspaces.length
-  const index = model.workspaces.findIndex((w) => w.id === id)
-  return model.workspaces[(((index + offset) % n) + n) % n].id
+  const real = realWorkspaces(model)
+  const n = real.length
+  const index = real.findIndex((w) => w.id === id)
+  return real[(((index + offset) % n) + n) % n].id
 }
 
 // ---- Entries (tabs) ----

@@ -98,12 +98,22 @@ chrome.tabs.onAttached.addListener((tabId, { newWindowId }) => {
 chrome.tabs.onMoved.addListener((tabId, { windowId }) => {
   if (!inOther(windowId)) emit({ type: 'tabMoved', tabId, windowId })
 })
+// Windows Grove asked for (newWindow), oldest first: the next normal
+// window to appear is the first one's, and so is its first new tab.
+const groveWindows = []
 chrome.windows.onCreated.addListener((w) => {
-  if (w.type !== 'normal') otherWindows.add(w.id)
-  else emit({ type: 'windowCreated', windowId: w.id })
+  if (w.type !== 'normal') return otherWindows.add(w.id)
+  const asked = groveWindows.shift()
+  if (asked?.requestId) pending.set(w.id, [asked.requestId])
+  emit({ type: 'windowCreated', windowId: w.id, grove: asked ? true : undefined })
 })
 chrome.windows.onRemoved.addListener((windowId) => {
   if (!otherWindows.delete(windowId)) emit({ type: 'windowRemoved', windowId })
+})
+// Zen's shortcut for a new blank window (Ctrl/Cmd+Shift+N): the host makes
+// it blank, as a window Grove asked for.
+chrome.commands.onCommand.addListener((command) => {
+  if (command === 'new-blank-window') void globalThis.grove.newWindow({ url: 'chrome://newtab/' })
 })
 // The computer going idle (no input for a couple of minutes) or locked:
 // the host organizes tabs then (host/organize.ts).
@@ -303,6 +313,40 @@ globalThis.grove = {
     }
     const tab = await chrome.tabs.create({ windowId, url, active })
     return tabInfo(tab)
+  },
+  // A new window: with an existing tab moved into it, or a new one at
+  // `url` (whose onCreated carries requestId). At a screen point, if given.
+  async newWindow({ tabId, url, left, top, requestId }) {
+    const asked = { requestId }
+    groveWindows.push(asked)
+    const options = { type: 'normal', focused: true, ...(tabId === undefined ? { url } : { tabId }) }
+    if (left !== undefined && top !== undefined) Object.assign(options, { left: Math.round(left), top: Math.round(top) })
+    try {
+      // A point too near the screen's edge for the window: where Chrome
+      // puts a new window.
+      const w = await chrome.windows.create(options).catch((e) => {
+        if (options.left === undefined) throw e
+        delete options.left
+        delete options.top
+        return chrome.windows.create(options)
+      })
+      return w.id
+    } catch (e) {
+      groveWindows.splice(groveWindows.indexOf(asked) >>> 0, 1)
+      throw e
+    }
+  },
+  async closeWindow(windowId) {
+    await chrome.windows.remove(windowId)
+  },
+  // The normal window, other than `except`, under a screen point. (Only
+  // where Chrome knows where windows are: not on Wayland.)
+  async windowAt({ x, y, except }) {
+    const windows = await chrome.windows.getAll({ windowTypes: ['normal'] })
+    const hit = windows.filter(
+      (w) => w.id !== except && w.state !== 'minimized' && x >= w.left && x < w.left + w.width && y >= w.top && y < w.top + w.height
+    )
+    return (hit.find((w) => w.focused) ?? hit[0])?.id ?? null
   },
   // Every page in history, for the host's index.
   async history() {

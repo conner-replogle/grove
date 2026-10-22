@@ -41,7 +41,8 @@ export type BridgeEvent =
   | { type: 'tabActivated'; tabId: number; windowId: number }
   | { type: 'tabAttached'; tabId: number; windowId: number }
   | { type: 'tabMoved'; tabId: number; windowId: number }
-  | { type: 'windowCreated'; windowId: number }
+  // `grove`: the window Grove itself asked for (newWindow).
+  | { type: 'windowCreated'; windowId: number; grove?: boolean }
   | { type: 'windowRemoved'; windowId: number }
   | { type: 'permissionRequest'; id: string; tabId: number; origin: string; topOrigin?: string; kinds: PermissionKind[] }
   | { type: 'download'; download: DownloadView; created?: boolean }
@@ -112,6 +113,7 @@ interface Binding {
 }
 
 const NEW_TAB_URL = 'chrome://newtab/'
+const BLANK_REFUSES = new Set<HostCommand['type']>(['setPinned', 'setEssential', 'newFolder', 'setFolderPinned', 'organize', 'switchWorkspace'])
 const originOf = (url: string): string | undefined => {
   try {
     return new URL(url).origin
@@ -120,6 +122,8 @@ const originOf = (url: string): string | undefined => {
   }
 }
 const isNewTabPage = (url: string): boolean => /^chrome:\/\/(newtab|new-tab-page)\/?$/.test(url)
+// Chrome knows where windows are on screen, except on Wayland.
+const windowsHavePlaces = (): boolean => process.platform !== 'linux' || !process.env.WAYLAND_DISPLAY
 
 export class GroveHost {
   private model: Model
@@ -178,6 +182,10 @@ export class GroveHost {
   // windows to give their page back to (queueReclaim).
   private readonly activating = new Set<string>()
   private reclaimQueued?: ReturnType<typeof setTimeout>
+  // Windows the user just opened whose first tab hasn't come yet.
+  private readonly freshWindows = new Set<number>()
+  // Blank windows Grove is closing (their last tab went).
+  private readonly closingWindows = new Set<number>()
   // A window's next new tab joins this entry in a split (splitNextTab).
   private splitNext?: { windowId: number; entryId: string; at: number }
   // Tabs whose page has drawn (or finished loading); see EntryView.painted.
@@ -214,7 +222,9 @@ export class GroveHost {
     this.ui = ui
     this.log = log
     this.sitePermissions = sitePermissions
-    this.model = store.load()
+    // A blank window's tabs go with it: none are left from a Grove that
+    // didn't get to close them.
+    this.model = M.withoutBlank(store.load())
   }
 
   // ---- Start-up ----
@@ -291,11 +301,31 @@ export class GroveHost {
       case 'tabMoved':
         return this.queueOrder()
       case 'windowCreated':
-        this.bindWindow(e.windowId)
+        // Grove's own new windows are blank; the user's (Ctrl+N) show a
+        // workspace, unless they open with a page (a link opened in a new
+        // window), which makes them blank too.
+        if (e.grove) this.makeBlank(e.windowId)
+        else {
+          this.bindWindow(e.windowId)
+          // (Unless its first tab has come already.)
+          if (!this.tabsIn(e.windowId).length) {
+            this.freshWindows.add(e.windowId)
+            setTimeout(() => this.freshWindows.delete(e.windowId), 3000)
+          }
+        }
         return this.queuePush()
-      case 'windowRemoved':
+      case 'windowRemoved': {
+        const ws = this.blankOf(e.windowId)
         this.windows.delete(e.windowId)
+        this.freshWindows.delete(e.windowId)
+        this.closingWindows.delete(e.windowId)
+        if (ws) {
+          ws.entries.forEach((x) => this.unmap(x.id))
+          this.closeEntries(ws.entries.map((x) => x.id))
+          this.update((m) => M.deleteWorkspace(m, ws.id))
+        }
         return this.queuePush()
+      }
       case 'permissionRequest':
         this.permissions.push({ id: e.id, tabId: e.tabId, origin: e.origin, topOrigin: e.topOrigin, kinds: e.kinds })
         return this.queuePush()
@@ -379,6 +409,11 @@ export class GroveHost {
 
   private onTabCreated(tab: BridgeTab, requestId?: string, restoredSession?: string): void {
     this.tabWindow.set(tab.id, tab.windowId)
+    // The first tab of a window the user opened: a page (not the new-tab
+    // page) makes it a blank window, as Zen opens links in new windows.
+    if (this.freshWindows.delete(tab.windowId) && !requestId && tab.url && !isNewTabPage(tab.url)) {
+      this.makeBlank(tab.windowId)
+    }
     if (tab.audible) this.audible.add(tab.id)
     if (this.entryOf.has(tab.id)) return
     const req = requestId ? this.requests.get(requestId) : undefined
@@ -545,6 +580,9 @@ export class GroveHost {
   async command(windowId: number, c: HostCommand): Promise<void> {
     const b = this.bindWindow(windowId)
     if (c.type !== 'hello') this.userActed = true
+    // A blank window has no pins, Essentials or folders.
+    if (this.blankOf(windowId) && BLANK_REFUSES.has(c.type)) return
+    if (c.type === 'moveEntry' && c.section !== 'tabs' && this.blankOf(windowId)) return
     switch (c.type) {
       case 'hello':
         this.uiReady.add(windowId)
@@ -618,6 +656,9 @@ export class GroveHost {
       case 'setSplitLayout':
         return this.editWorkspace(b, (ws) => M.setSplitLayout(ws, c.splitId, c.layout))
       case 'moveToWorkspace':
+        // Out of a blank window: its page is put away first (Chrome keeps it
+        // whole, for the workspace to reopen), as the window may close.
+        if (M.workspaceOfEntry(this.model, c.entryId)?.blank) await this.unloadByUser([c.entryId])
         this.update((m) => M.sendToWorkspace(m, c.entryId, c.workspaceId))
         return this.settle(c.entryId)
       case 'moveWorkspace':
@@ -630,8 +671,14 @@ export class GroveHost {
       case 'newWorkspace': {
         let id!: string
         this.update((m) => ([m, id] = M.createWorkspace(m, c.name, c.color, c.icon))[0])
-        return this.switchWorkspace(windowId, id)
+        return this.blankOf(windowId) ? this.moveWindowTo(windowId, id) : this.switchWorkspace(windowId, id)
       }
+      case 'newBlankWindow':
+        return void (await this.bridge?.call('newWindow', { url: NEW_TAB_URL }).catch((e: unknown) => this.log('new window', e)))
+      case 'tearOff':
+        return this.tearOff(windowId, c.entryId, c.x, c.y)
+      case 'moveWindowTo':
+        return this.moveWindowTo(windowId, c.workspaceId)
       case 'editWorkspace':
         this.update((m) => M.editWorkspace(m, c.workspaceId, { name: c.name, color: c.color, icon: c.icon }))
         return
@@ -703,6 +750,149 @@ export class GroveHost {
       case 'clearSiteData':
         return this.sitePanel(windowId, b, c)
     }
+  }
+
+  // ---- Blank windows (Zen's) ----
+
+  // The blank workspace of a window, if it's a blank window.
+  private blankOf(windowId: number): Workspace | undefined {
+    const id = this.windows.get(windowId)?.workspaceId
+    return id ? this.blankWs(id) : undefined
+  }
+
+  private blankWs(workspaceId: string): Workspace | undefined {
+    const ws = this.model.workspaces.find((w) => w.id === workspaceId)
+    return ws?.blank ? ws : undefined
+  }
+
+  // Makes a window blank (once): a workspace of its own, empty so far.
+  private makeBlank(windowId: number): string {
+    this.freshWindows.delete(windowId)
+    const had = this.blankOf(windowId)
+    if (had) return had.id
+    let id!: string
+    this.update((m) => ([m, id] = M.createBlankWorkspace(m))[0])
+    const b = this.bindWindow(windowId)
+    b.workspaceId = id
+    b.activeEntryId = undefined
+    return id
+  }
+
+  // Closes a blank window whose last tab went, as Zen does.
+  private async closeBlank(windowId: number): Promise<void> {
+    if (this.closingWindows.has(windowId)) return
+    this.closingWindows.add(windowId)
+    this.tabsIn(windowId).forEach((t) => this.closingByHost.add(t))
+    await this.bridge?.call('closeWindow', windowId).catch((e: unknown) => this.log('close window', e))
+  }
+
+  // A tab dragged off its window (or "Move to new window"): a blank window
+  // of its own at the drop point, which its page moves into. Dropped on
+  // another of Grove's windows, it joins that window instead.
+  private async tearOff(windowId: number, entryId: string, x?: number, y?: number): Promise<void> {
+    const found = M.findEntry(this.model, entryId)
+    const bridge = this.bridge
+    // The Essentials stay.
+    if (!found?.workspace || !bridge) return
+    const at = x !== undefined && y !== undefined ? { left: x - 120, top: y - 16 } : {}
+    if (at.left !== undefined && windowsHavePlaces()) {
+      const under = await bridge.call<number | null>('windowAt', { x, y, except: windowId }).catch(() => null)
+      if (under !== null && this.windows.has(under)) return this.moveToWindow(entryId, under)
+    }
+    // A blank window's only tab is in a window of its own already.
+    if (found.workspace.blank && found.workspace.entries.length === 1) return
+    const tabId = this.tabOf.get(entryId)
+    let created: number | undefined
+    if (tabId !== undefined) {
+      await this.keepWindowOpen(this.tabWindow.get(tabId)!, [tabId])
+      created = await bridge.call<number>('newWindow', { tabId, ...at }).catch((e: unknown) => void this.log('tear off', e))
+      if (created !== undefined) this.tabWindow.set(tabId, created)
+    } else {
+      // Not open: it opens in the new window.
+      const requestId = `r${this.nextRequest++}`
+      this.requests.set(requestId, { entryId })
+      created = await bridge
+        .call<number>('newWindow', { url: found.entry.url || NEW_TAB_URL, requestId, ...at })
+        .catch((e: unknown) => void this.log('tear off', e))
+      if (created === undefined) this.requests.delete(requestId)
+    }
+    if (created === undefined) return
+    const blankId = this.makeBlank(created)
+    const left = this.windowsShowing(entryId, created)
+    this.update((m) => M.moveTo(this.unsplit(m, entryId), entryId, blankId, { section: 'tabs' }))
+    this.setActive(created, this.windows.get(created)!, entryId)
+    await this.moveOn(left, entryId)
+    this.pushAll()
+  }
+
+  // An entry joins another window (dropped on it): that window's
+  // workspace, and its page moves there.
+  private async moveToWindow(entryId: string, windowId: number): Promise<void> {
+    const b = this.windows.get(windowId)!
+    if (!this.shows(b, entryId)) {
+      this.update((m) => M.moveTo(this.unsplit(m, entryId), entryId, b.workspaceId, { section: 'tabs' }))
+    }
+    const left = this.windowsShowing(entryId, windowId)
+    // They give the page up rather than keep it, paused.
+    for (const w of left) this.windows.get(w)!.activeEntryId = undefined
+    await this.activateIn(windowId, entryId)
+    await this.moveOn(left, entryId)
+    await this.bridge?.call('focusWindow', windowId).catch(() => {})
+    this.pushAll()
+  }
+
+  // Zen's "Move To": a blank window's tabs join a workspace, in a window
+  // that shows it (one on it already, else another window, which switches
+  // to it), and the blank window closes. With no other window, this one
+  // turns into one on the workspace.
+  private async moveWindowTo(windowId: number, workspaceId: string): Promise<void> {
+    const blank = this.blankOf(windowId)
+    if (!blank || !M.realWorkspaces(this.model).some((w) => w.id === workspaceId)) return
+    const b = this.windows.get(windowId)!
+    const active = b.activeEntryId
+    const ids = blank.entries.map((e) => e.id)
+    this.update((m) => ids.reduce((next, id) => M.transferEntry(next, id, blank.id, workspaceId), m))
+    const others = [...this.windows].filter(([w]) => w !== windowId && !this.blankOf(w) && !this.closingWindows.has(w))
+    const target = (others.find(([, x]) => x.workspaceId === workspaceId) ?? others[0])?.[0]
+    if (target === undefined) {
+      b.workspaceId = workspaceId
+      this.update((m) => ({ ...M.deleteWorkspace(m, blank.id), lastActiveWorkspaceId: workspaceId }))
+      if (active) this.setActive(windowId, b, active)
+      return this.pushAll()
+    }
+    // The other pages go over in the background; the one shown, last.
+    for (const id of ids) {
+      const t = this.tabOf.get(id)
+      if (id === active || t === undefined || this.tabWindow.get(t) !== windowId) continue
+      await this.keepWindowOpen(windowId, [t])
+      this.tabWindow.set(t, target)
+      await this.bridge!.call('move', { tabId: t, windowId: target, active: false }).catch((e: unknown) => this.log('move', e))
+    }
+    b.activeEntryId = undefined
+    await this.switchWorkspace(target, workspaceId)
+    if (active) await this.activateIn(target, active)
+    await this.closeBlank(windowId)
+    await this.bridge!.call('focusWindow', target).catch(() => {})
+    this.pushAll()
+  }
+
+  // The windows other than `except` that show an entry.
+  private windowsShowing(entryId: string, except: number): number[] {
+    return [...this.windows].filter(([w, b]) => w !== except && b.activeEntryId === entryId).map(([w]) => w)
+  }
+
+  // Windows that showed an entry now gone from them show another one.
+  private async moveOn(windowIds: number[], entryId: string): Promise<void> {
+    for (const w of windowIds) {
+      await this.afterLoss(w, { lost: [entryId] })
+      if (this.windows.has(w) && !this.closingWindows.has(w) && !this.windows.get(w)!.activeEntryId) await this.showActive(w)
+    }
+  }
+
+  // The model with an entry out of its split.
+  private unsplit(m: Model, entryId: string): Model {
+    const ws = M.workspaceOfEntry(m, entryId)
+    return ws ? M.withWorkspace(m, ws.id, (w) => M.unsplitEntry(w, entryId)) : m
   }
 
   // ---- The site panel ----
@@ -824,7 +1014,7 @@ export class GroveHost {
 
   // Windows on the workspace move to a neighbor first, which unloads it.
   private async deleteWorkspace(workspaceId: string): Promise<void> {
-    if (this.model.workspaces.length <= 1) return
+    if (M.realWorkspaces(this.model).length <= 1 || this.blankWs(workspaceId)) return
     const next = M.neighborWorkspace(this.model, workspaceId, -1)
     for (const [windowId, b] of this.windows) {
       if (b.workspaceId === workspaceId) await this.switchWorkspace(windowId, next)
@@ -838,7 +1028,7 @@ export class GroveHost {
   // over from another window, or opens a frozen entry.
   async activateIn(windowId: number, entryId: string): Promise<void> {
     const b = this.bindWindow(windowId)
-    if (!this.shows(b, entryId)) return
+    if (!this.shows(b, entryId) || this.closingWindows.has(windowId)) return
     this.activating.add(entryId)
     try {
       await this.showIn(windowId, b, entryId)
@@ -970,8 +1160,11 @@ export class GroveHost {
       const w = this.tabWindow.get(t)!
       byWindow.set(w, [...(byWindow.get(w) ?? []), t])
     }
-    for (const [windowId, windowTabs] of byWindow) await this.keepWindowOpen(windowId, windowTabs)
-    await this.closeTabs(tabs)
+    for (const [windowId, windowTabs] of byWindow) {
+      if (this.blankOf(windowId)?.entries.length === 0) await this.closeBlank(windowId)
+      else await this.keepWindowOpen(windowId, windowTabs)
+    }
+    await this.closeTabs(tabs.filter((t) => !this.closingWindows.has(this.tabWindow.get(t)!)))
     for (const w of affected) await this.afterLoss(w, { prefer: siblings.get(w), lost: entryIds })
     this.pushAll()
   }
@@ -991,6 +1184,7 @@ export class GroveHost {
   // ---- Internals ----
 
   private async showActive(windowId: number): Promise<void> {
+    if (this.closingWindows.has(windowId)) return
     const b = this.bindWindow(windowId)
     const ws = M.getWorkspace(this.model, b.workspaceId)
     const entryId = ws.entries.some((e) => e.id === b.activeEntryId)
@@ -1021,10 +1215,14 @@ export class GroveHost {
   // shows by now: that one isn't lost.
   private async afterLoss(windowId: number, opts: { prefer?: string[]; lost?: string[] } = {}): Promise<void> {
     const b = this.windows.get(windowId)
-    if (!b) return
+    if (!b || this.closingWindows.has(windowId)) return
     const lost = opts.lost ?? [b.activeEntryId]
     const ws = M.getWorkspace(this.model, b.workspaceId)
-    const here = [...ws.entries, ...this.model.essentials].filter((e) => {
+    if (ws.blank && !ws.entries.some((e) => !lost.includes(e.id))) {
+      b.activeEntryId = undefined
+      return this.closeBlank(windowId)
+    }
+    const here = [...ws.entries, ...(ws.blank ? [] : this.model.essentials)].filter((e) => {
       const t = this.tabOf.get(e.id)
       return t !== undefined && this.tabWindow.get(t) === windowId && !lost.includes(e.id)
     })
@@ -1176,7 +1374,7 @@ export class GroveHost {
   }
 
   private async organizeAll(): Promise<void> {
-    for (const ws of this.model.workspaces) await this.organize(ws.id, 'idle')
+    for (const ws of M.realWorkspaces(this.model)) await this.organize(ws.id, 'idle')
   }
 
   // The tabs windows show now count as just seen.
@@ -1232,10 +1430,11 @@ export class GroveHost {
   }
 
   // Whether a window on binding `b` shows the entry: its workspace's own,
-  // or an Essential.
+  // or an Essential (but not in a blank window).
   private shows(b: Binding, entryId: string): boolean {
     const found = M.findEntry(this.model, entryId)
-    return !!found && (!found.workspace || found.workspace.id === b.workspaceId)
+    if (!found) return false
+    return found.workspace ? found.workspace.id === b.workspaceId : !this.blankWs(b.workspaceId)
   }
 
   private setActive(_windowId: number, b: Binding, entryId: string): void {
@@ -1243,16 +1442,15 @@ export class GroveHost {
     const was = b.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
     if (was !== undefined) this.shownAt.set(was, Date.now())
     b.activeEntryId = entryId
+    // New windows open on the workspace last used, never a blank window's.
+    const lastActiveWorkspaceId = this.blankWs(b.workspaceId) ? this.model.lastActiveWorkspaceId : b.workspaceId
     if (!M.findEntry(this.model, entryId)?.workspace) {
       // An Essential: the workspace keeps its own last tab.
       const now = Date.now()
-      this.update((m) => ({ ...M.editEntry(m, entryId, (e) => ({ ...e, lastActive: now })), lastActiveWorkspaceId: b.workspaceId }))
+      this.update((m) => ({ ...M.editEntry(m, entryId, (e) => ({ ...e, lastActive: now })), lastActiveWorkspaceId }))
       return
     }
-    this.update((m) => ({
-      ...M.withWorkspace(m, b.workspaceId, (ws) => M.activateEntry(ws, entryId)),
-      lastActiveWorkspaceId: b.workspaceId
-    }))
+    this.update((m) => ({ ...M.withWorkspace(m, b.workspaceId, (ws) => M.activateEntry(ws, entryId)), lastActiveWorkspaceId }))
   }
 
   private entry(entryId: string): Entry | undefined {
@@ -1274,15 +1472,16 @@ export class GroveHost {
     const next = fn(this.model)
     if (next === this.model) return
     this.model = next
-    this.store.save(next)
+    this.store.save(M.withoutBlank(next))
     this.queuePush()
     this.onModelChange?.()
   }
 
   // ---- Sync ----
 
+  // Without blank windows' tabs, which aren't synced.
   get current(): Model {
-    return this.model
+    return M.withoutBlank(this.model)
   }
 
   isLive(entryId: string): boolean {
@@ -1295,8 +1494,10 @@ export class GroveHost {
   // workspace that's gone (deleted elsewhere, or merged into the synced one
   // of the same name when this device joined) move on. Windows showing an
   // entry keep showing it.
-  async applySynced(next: Model, remap: ReadonlyMap<string, string>): Promise<void> {
+  async applySynced(synced: Model, remap: ReadonlyMap<string, string>): Promise<void> {
     const prev = this.model
+    // Blank windows keep their own tabs.
+    const next = { ...synced, workspaces: [...synced.workspaces, ...prev.workspaces.filter((w) => w.blank)] }
     const idsOf = (m: Model) => new Set([...m.essentials, ...m.workspaces.flatMap((w) => w.entries)].map((e) => e.id))
     const kept = idsOf(next)
     const gone = [...idsOf(prev)].filter((id) => !kept.has(id))
@@ -1305,7 +1506,7 @@ export class GroveHost {
       return was && was.workspace?.id !== M.findEntry(next, id)!.workspace?.id
     })
     this.model = next
-    this.store.save(next)
+    this.store.save(synced)
     const rebound: number[] = []
     for (const [windowId, b] of this.windows) {
       if (next.workspaces.some((w) => w.id === b.workspaceId)) continue
@@ -1329,9 +1530,9 @@ export class GroveHost {
   async resume(workspaceId: string, entryId: string | undefined): Promise<void> {
     if (this.userActed || !this.bridge || this.settings?.get().resume === false) return
     await this.started()
-    const windowId = [...this.windows.keys()][0]
+    const windowId = [...this.windows.keys()].find((w) => !this.blankOf(w))
     const b = windowId === undefined ? undefined : this.windows.get(windowId)
-    if (!b || this.userActed || !this.model.workspaces.some((w) => w.id === workspaceId)) return
+    if (windowId === undefined || !b || this.userActed || !this.model.workspaces.some((w) => w.id === workspaceId)) return
     this.log('resuming where the user was on another device')
     await this.switchWorkspace(windowId, workspaceId)
     if (entryId && entryId !== b.activeEntryId && this.shows(b, entryId)) await this.activateIn(windowId, entryId)
@@ -1344,7 +1545,7 @@ export class GroveHost {
   }
 
   flush(): void {
-    this.store.save(this.model)
+    this.store.save(M.withoutBlank(this.model))
     this.store.flush()
   }
 
@@ -1466,7 +1667,7 @@ export class GroveHost {
     }
     return {
       windowId,
-      workspaces: this.model.workspaces.map(({ id, name, color, icon }) => ({ id, name, color, icon })),
+      workspaces: M.realWorkspaces(this.model).map(({ id, name, color, icon }) => ({ id, name, color, icon })),
       workspace: {
         id: ws.id,
         name: ws.name,
@@ -1475,7 +1676,8 @@ export class GroveHost {
         groups: ws.groups,
         entries: ws.entries.map(entryView)
       },
-      essentials: this.model.essentials.map(entryView),
+      essentials: ws.blank ? [] : this.model.essentials.map(entryView),
+      blank: ws.blank,
       activeEntryId: b.activeEntryId,
       split: this.splitIn(windowId, b, ws),
       paused: this.pausedIn(windowId, b),
@@ -1483,7 +1685,7 @@ export class GroveHost {
       settings: this.settings?.get() ?? DEFAULT_SETTINGS,
       sync: this.sync?.status() ?? { state: 'off', pending: 0 },
       downloads: this.downloads,
-      organize: { available: !!this.workersAi?.status().accountId, busy: this.organizing.has(ws.id), error: this.organizeError },
+      organize: { available: !ws.blank && !!this.workersAi?.status().accountId, busy: this.organizing.has(ws.id), error: this.organizeError },
       workersAi: this.workersAi?.status() ?? {},
       store: this.storeIn(b),
       translate: this.translateIn(b),

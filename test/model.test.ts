@@ -4,6 +4,7 @@ import {
   addEntry,
   closeEntries,
   closeEntry,
+  createBlankWorkspace,
   createGroup,
   createWorkspace,
   deleteWorkspace,
@@ -21,6 +22,7 @@ import {
   normalize,
   placeEntry,
   placeGroup,
+  realWorkspaces,
   recolorWorkspace,
   renameWorkspace,
   setEntryGroup,
@@ -31,6 +33,7 @@ import {
   updateEntry,
   updateGroup,
   withWorkspace,
+  withoutBlank,
   workspaceOfEntry
 } from '../host/model.ts'
 import { isWorkspaceColor, type Workspace } from '../shared/types.ts'
@@ -101,6 +104,42 @@ describe('workspaces', () => {
     expect(neighborWorkspace(m, home, 1)).toBe(b)
     expect(neighborWorkspace(m, home, -1)).toBe(b)
     expect(neighborWorkspace(m, b, 1)).toBe(home)
+  })
+
+  it("keeps blank windows' workspaces apart from the user's", () => {
+    let m = emptyModel()
+    const home = m.workspaces[0].id
+    let blank: string
+    ;[m, blank] = createBlankWorkspace(m)
+    let b: string
+    ;[m, b] = createWorkspace(m)
+    // New workspaces go before blank ones, and are named and colored as if
+    // there were none.
+    expect(m.workspaces.map((w) => w.id)).toEqual([home, b, blank])
+    expect(getWorkspace(m, b).name).toBe('Workspace 2')
+    expect(realWorkspaces(m).map((w) => w.id)).toEqual([home, b])
+    expect(withoutBlank(m).workspaces.map((w) => w.id)).toEqual([home, b])
+    expect(neighborWorkspace(m, b, 1)).toBe(home)
+    // The last real workspace stays; a blank one can always go.
+    const one = deleteWorkspace(m, b)
+    expect(deleteWorkspace(one, home)).toBe(one)
+    expect(deleteWorkspace(one, blank).workspaces.map((w) => w.id)).toEqual([home])
+    // Deleting a workspace never makes a blank one the last active.
+    expect(deleteWorkspace({ ...m, lastActiveWorkspaceId: b }, b).lastActiveWorkspaceId).toBe(home)
+  })
+
+  it('moves a tab into a blank window and back', () => {
+    let m = emptyModel()
+    const home = m.workspaces[0].id
+    m = withWorkspace(m, home, (w) => addEntry(addEntry(w, { url: 'https://a/' }, { pinned: true })[0], { url: 'https://b/' })[0])
+    const [a, bEntry] = getWorkspace(m, home).entries
+    let blank: string
+    ;[m, blank] = createBlankWorkspace(m)
+    m = moveTo(m, a.id, blank, { section: 'tabs' })
+    expect(getWorkspace(m, blank).entries.map((e) => [e.id, e.pinned])).toEqual([[a.id, false]])
+    m = transferEntry(m, a.id, blank, home)
+    expect(getWorkspace(m, home).entries.map((e) => e.id)).toEqual([bEntry.id, a.id])
+    expect(getWorkspace(m, blank).entries).toEqual([])
   })
 
   it('withWorkspace normalizes and rejects unknown ids', () => {

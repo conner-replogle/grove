@@ -584,3 +584,39 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 }
 .update-actions button.primary { color: white; background: var(--zen-primary-color); }
 .update-actions button:hover { filter: brightness(1.08); }
+
+/* ---- A blank window (Zen's): a pill for its name, and Move to ---- */
+
+.workspace-indicator.blank:hover::before { background: none; }
+.workspace-indicator.blank .pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--zen-sidebar-themed-icon-fill);
+  background: color-mix(in srgb, var(--zen-sidebar-themed-icon-fill) 16%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.workspace-indicator.blank .move-to {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  font: 500 11.5px system-ui, sans-serif;
+  color: inherit;
+  background: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.workspace-indicator.blank .move-to svg { width: 14px; height: 14px; }
+.workspace-indicator.blank .move-to:hover { opacity: 1; background: var(--tab-background-color-hover); }

@@ -12,7 +12,9 @@
 //   data-group    the folder id (folder headers, and tabs inside a folder)
 //   data-workspace  the workspace id (workspace icons)
 //
-// A tab dragged out over the page splits it (src/split.ts).
+// A tab dragged out over the page splits it (src/split.ts); dropped
+// outside the window, it goes to a blank window of its own, as in Zen (or,
+// over another of Grove's windows, joins that one).
 import type { EntryView, HostCommand, WindowState } from '../shared/protocol.ts'
 import { send } from './host-client'
 import { sidebarDrop } from './split'
@@ -143,7 +145,7 @@ export class Dragger {
     // With nothing pinned yet there's no Essentials grid to drop on: add an
     // empty one at the top, which opens when the pointer heads up there.
     const scroll = this.root.querySelector('.scroll')
-    if ('entryId' in source && scroll && !this.root.querySelector('.essentials')) {
+    if ('entryId' in source && scroll && !this.root.querySelector('.essentials') && !this.state()?.blank) {
       const zone = document.createElement('div')
       zone.className = 'essentials empty-zone'
       zone.textContent = 'Add to Essentials'
@@ -159,11 +161,24 @@ export class Dragger {
       this.press_ = undefined
       return
     }
+    const source = this.press_?.source
+    if (drop && source && 'entryId' in source && outsideWindow(e) && this.tearsOff(source.entryId)) {
+      this.finish(false)
+      send({ type: 'tearOff', entryId: source.entryId, x: e.screenX, y: e.screenY })
+      return
+    }
     if (drop && this.target) this.target = this.targetAt(e.clientX, e.clientY)
     else if (drop && this.pageDrop && this.press_ && 'entryId' in this.press_.source) {
       this.pageDrop = sidebarDrop.over(this.press_.source.entryId, e.clientX, e.clientY)
     }
     this.finish(drop)
+  }
+
+  // Whether an entry can leave its window: not an Essential. (A blank
+  // window's only tab can only join another window; the host sees to it.)
+  private tearsOff(entryId: string): boolean {
+    const s = this.state()
+    return !!s && !s.essentials.some((e) => e.id === entryId)
   }
 
   private finish(drop: boolean): void {
@@ -416,4 +431,9 @@ function nextTopLevel(
   return list
     .slice(i + 1)
     .find((e) => e.id !== skip && (!own || e.groupId !== own) && (!skipGroup || e.groupId !== skipGroup))?.id
+}
+
+// A pointer let go outside the window (the drag kept it captured).
+function outsideWindow(e: PointerEvent): boolean {
+  return e.clientX < 0 || e.clientY < 0 || e.clientX >= innerWidth || e.clientY >= innerHeight
 }

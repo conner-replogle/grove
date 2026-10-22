@@ -109,8 +109,14 @@ if (runningPid()) {
 // extension's worker again only when the extension's version changes, and
 // otherwise keeps running the script it registered before, even once the
 // file changes. The folder stays put, so the extension keeps its id.
+const BRIDGE_DIR = join(PROFILE, 'Grove Bridge')
+
+// The id Chrome gives an unpacked extension: from its folder's path.
+const unpackedId = (dir) =>
+  [...createHash('sha256').update(dir).digest('hex').slice(0, 32)].map((h) => String.fromCharCode(97 + parseInt(h, 16))).join('')
+
 function prepareBridge() {
-  const dir = join(PROFILE, 'Grove Bridge')
+  const dir = BRIDGE_DIR
   const files = readdirSync(EXTENSION_SOURCE).filter((f) => f.endsWith('.js')).sort()
   const sources = new Map(files.map((f) => [f, readFileSync(join(EXTENSION_SOURCE, f))]))
   const digest = createHash('sha256')
@@ -166,6 +172,12 @@ function prepareProfile() {
   if (prefs.browser?.enable_spellchecking === undefined) {
     prefs.browser = { ...prefs.browser, enable_spellchecking: true }
   }
+  // Zen's New Blank Window key, Ctrl/Cmd+Shift+N, for the bridge's command
+  // (Chrome won't give an extension a key of its own, incognito's here, from
+  // the manifest's suggestion), unless the user put something else on it.
+  const key = mac ? 'mac:Command+Shift+N' : `${process.platform === 'win32' ? 'windows' : 'linux'}:Ctrl+Shift+N`
+  const commands = (prefs.extensions = { ...prefs.extensions, commands: { ...prefs.extensions?.commands } }).commands
+  if (!commands[key]) commands[key] = { command_name: 'new-blank-window', extension: unpackedId(BRIDGE_DIR), global: false }
   writeFileSync(file, JSON.stringify(prefs))
 }
 

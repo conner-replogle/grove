@@ -84,6 +84,13 @@ workspace used. At launch, a device picks up where you were on another one
 last-writer-wins by hybrid logical clock stamp, and order uses fractional
 keys, so two devices' edits merge cleanly. See `host/sync/`.
 
+Blank windows, as in Zen, aren't synced or saved: a window of its own
+tabs, with no workspaces, Essentials or pins, that goes when it closes.
+You get one by dragging a tab off a window, from a tab's "Move to new
+window", with Ctrl/Cmd+Shift+N (or "New blank window" on a workspace's
+menu), or by opening a link in a new window. Its "Move to" button sends
+its tabs to a workspace.
+
 It's end-to-end encrypted: the server (`sync-worker/`, a Cloudflare Worker
 with one Durable Object per account) only stores sealed change batches and
 hands them on; devices do all merging. One secret gives each device the
