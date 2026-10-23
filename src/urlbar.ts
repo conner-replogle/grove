@@ -18,7 +18,7 @@
 // can happen at any time (another window, sync, Organize); while the bar is
 // open those don't happen, and if the field loses focus some other way it
 // gets it back with what was typed.
-import { addressText, onAddressSet } from './address'
+import { addressText, keepEditsWhile, onAddressSet, setOwnText } from './address'
 import { onFocusUrlBar, onOpenNewTabSearch, send } from './host-client'
 
 let holding = false
@@ -49,6 +49,10 @@ let onSearchEnd: ((opened: boolean) => void) | undefined
 type SearchboxField = Element & { setInputText?(t: string): void }
 const searchboxField = (): SearchboxField | null =>
   document.querySelector('webui-browser-app')?.shadowRoot?.querySelector('#address') ?? null
+const setFieldText = (text: string): void => setOwnText(() => searchboxField()?.setInputText?.(text))
+
+// The user has typed in the URL bar since it opened.
+let edited = false
 
 // Webium's searchbox (cr-searchbox), as suggestions.ts and Enter use it.
 export interface Searchbox extends HTMLElement {
@@ -70,7 +74,7 @@ export function openNewTabSearch(onEnd?: (opened: boolean) => void): void {
   searchUntouched = true
   setCentered(true)
   focusField()
-  searchboxField()?.setInputText?.('')
+  setFieldText('')
   // Ctrl+T comes from the keyboard: Chrome's keyboard focus may be on a page.
   stopRetries()
   retries = [0, 120, 400].map((delay) => setTimeout(claimKeyboard, delay))
@@ -79,7 +83,7 @@ export function openNewTabSearch(onEnd?: (opened: boolean) => void): void {
 function endNewTabSearch(opened = false): void {
   if (!searchingForNewTab) return
   searchingForNewTab = false
-  if (!opened) searchboxField()?.setInputText?.(addressBefore)
+  if (!opened) setFieldText(addressBefore)
   const end = onSearchEnd
   onSearchEnd = undefined
   end?.(opened)
@@ -103,8 +107,20 @@ export function openUrlBarOnNewTab(): void {
   // search opens, and Chrome then puts that page's address in the field.
   // Until something is typed, the search stays empty.
   onAddressSet((_, text) => {
-    if (searchingForNewTab && searchUntouched && text) setTimeout(() => searchboxField()?.setInputText?.(''), 0)
+    // The page's address now, for the field once the search is done with.
+    if (searchingForNewTab && text) addressBefore = text
+    if (searchingForNewTab && searchUntouched && text) setTimeout(() => setFieldText(''), 0)
   })
+  // What the user types stays while the page navigates (a redirect, a page
+  // still loading): the page's address waits until the URL bar closes.
+  keepEditsWhile(() => (searchingForNewTab ? !searchUntouched : open && edited))
+  document.addEventListener(
+    'input',
+    (e) => {
+      if (inSearchbox(e)) edited = true
+    },
+    true
+  )
   onFocusUrlBar(openForNewTab)
   onOpenNewTabSearch(() => openNewTabSearch())
   openInNewTabWhileSearching()
@@ -283,6 +299,7 @@ export function watchUrlBarPlace(box: HTMLElement): void {
   box.addEventListener('pointerdown', measure, true)
   selectAllOnClick(box)
   box.addEventListener('focusin', () => {
+    if (!open) edited = false
     open = true
   })
   // The field lost focus. If the user clicked the page, the bar closes (a
@@ -304,7 +321,7 @@ export function watchUrlBarPlace(box: HTMLElement): void {
         open = false
         holding = false
         stopRetries()
-        if (!searchingForNewTab) searchboxField()?.setInputText?.(addressText())
+        if (!searchingForNewTab) setFieldText(addressText())
       }
       if (!holding && !searchboxFocused()) {
         setCentered(false)

@@ -13,6 +13,27 @@ type SearchboxInput = Element & { shadowRoot: ShadowRoot }
 
 let fullText = ''
 let onSet: ((host: Element, text: string) => void) | undefined
+// Whether the user is typing in the field (the URL bar's, src/urlbar.ts).
+let editing: () => boolean = () => false
+// Grove itself is setting the text (setOwnText).
+let own = false
+
+// While `fn` says the user is typing, Chrome's address for the page (a
+// redirect, a page changing its own URL) doesn't replace what they typed,
+// as in Chrome's own URL bar; addressText() has it for when they're done.
+export function keepEditsWhile(fn: () => boolean): void {
+  editing = fn
+}
+
+// Sets the field's text from Grove, whether or not the user is typing.
+export function setOwnText(set: () => void): void {
+  own = true
+  try {
+    set()
+  } finally {
+    own = false
+  }
+}
 
 // Called whenever Chrome sets the field's text.
 export function onAddressSet(fn: (host: Element, text: string) => void): void {
@@ -37,6 +58,11 @@ export function addressText(): string {
 
 export function showDomainOnly(): void {
   patchMethod<[string], unknown, SearchboxInput>('cr-searchbox-input', 'onSetInputText_', function (original, text) {
+    if (!own && editing()) {
+      fullText = text
+      onSet?.(this, text)
+      return undefined
+    }
     const result = original(text)
     fullText = text
     wire(this)

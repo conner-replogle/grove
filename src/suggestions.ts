@@ -235,7 +235,14 @@ function translate(
   forget: (s: HistorySuggestion) => void,
   queried: (queryId: number, preventInline: boolean) => void
 ): Handler {
-  const at = (line: unknown): Source | undefined => sources()[line as number]
+  // A match's calls name it by its line, which comes just before its URL:
+  // (line, url, ...) until Chromium 155, which puts a number of its own
+  // first. Swaps a line of what's shown for Chrome's own.
+  const lineAt = (a: unknown[]): number => {
+    const url = a.findIndex((x) => typeof x === 'string')
+    return url > 0 && typeof a[url - 1] === 'number' ? url - 1 : 0
+  }
+  const withLine = (a: unknown[], i: number, line: number): unknown[] => a.map((x, j) => (j === i ? line : x))
   return new Proxy(handler, {
     get(target, key) {
       const value = Reflect.get(target, key) as unknown
@@ -249,30 +256,21 @@ function translate(
           return call(...a)
         }
       }
-      if (key === 'openAutocompleteMatch') {
-        return (line: unknown, url: unknown, showing: unknown, button: unknown, mods: unknown, ...rest: unknown[]) => {
-          const src = at(line)
+      if (key === 'openAutocompleteMatch' || key === 'deleteAutocompleteMatch' || key === 'onNavigationLikely') {
+        return (...a: unknown[]) => {
+          const i = lineAt(a)
+          const src = sources()[a[i] as number]
           if (src && 'grove' in src) {
-            const m = (mods ?? {}) as { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }
+            if (key === 'deleteAutocompleteMatch') return forget(src.grove)
+            if (key === 'onNavigationLikely') return
+            // (..., url, areMatchesShowing, mouseButton, modifiers, ...)
+            const button = a[i + 3]
+            const m = (a[i + 4] ?? {}) as { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }
             const newTab = isNewTabSearch() || !!(m.ctrlKey || m.metaKey || m.shiftKey) || button === 1
             send({ type: 'open', url: src.grove.url, newTab })
             return
           }
-          return call(src ? src.chrome : line, url, showing, button, mods, ...rest)
-        }
-      }
-      if (key === 'deleteAutocompleteMatch') {
-        return (line: unknown, ...rest: unknown[]) => {
-          const src = at(line)
-          if (src && 'grove' in src) return forget(src.grove)
-          return call(src ? src.chrome : line, ...rest)
-        }
-      }
-      if (key === 'onNavigationLikely') {
-        return (line: unknown, ...rest: unknown[]) => {
-          const src = at(line)
-          if (src && 'grove' in src) return
-          return call(src ? src.chrome : line, ...rest)
+          return call(...(src ? withLine(a, i, src.chrome) : a))
         }
       }
       return call
