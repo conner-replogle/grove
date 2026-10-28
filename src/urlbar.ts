@@ -359,17 +359,22 @@ function selectAllOnClick(box: HTMLElement): void {
   )
 }
 
+// Chrome's modifier for a new tab: Cmd on a Mac, Ctrl elsewhere. With Shift
+// it opens a new foreground tab; Shift alone opens a new window.
+const mac = navigator.platform.startsWith('Mac')
+const newTabKey = (e: KeyboardEvent | MouseEvent): boolean => (mac ? e.metaKey : e.ctrlKey) && e.shiftKey
+
 // While a new tab's search is open, a click on a suggestion opens it in a
-// new foreground tab: Chrome's disposition for Ctrl+Shift, which Webium's
-// searchbox reads off the event and passes to the browser. (Enter does the
-// same in enterWaitsForResults.)
+// new foreground tab: Chrome's disposition for Ctrl+Shift (Cmd+Shift on a
+// Mac), which Webium's searchbox reads off the event and passes to the
+// browser. (Enter does the same in enterWaitsForResults.)
 function openInNewTabWhileSearching(): void {
   const redirect = (e: KeyboardEvent | MouseEvent, make: (init: KeyboardEventInit & MouseEventInit) => Event): void => {
-    if (!searchingForNewTab || !inSearchbox(e) || (e.ctrlKey && e.shiftKey)) return
+    if (!searchingForNewTab || !inSearchbox(e) || newTabKey(e)) return
     e.preventDefault()
     e.stopImmediatePropagation()
     endNewTabSearch(true)
-    const init = { bubbles: true, composed: true, cancelable: true, ctrlKey: true, shiftKey: true }
+    const init = { bubbles: true, composed: true, cancelable: true, ctrlKey: !mac, metaKey: mac, shiftKey: true }
     e.composedPath()[0]?.dispatchEvent(make(init))
   }
   document.addEventListener(
@@ -389,7 +394,8 @@ function openInNewTabWhileSearching(): void {
 // first (which Grove does right after Enter); and Grove's own suggestions
 // (suggestions.ts) may change the first row. So Grove holds the Enter until
 // the results for the field's text are in, then sends it on, as
-// Ctrl+Shift+Enter (a new foreground tab) for a new tab's search.
+// Ctrl+Shift+Enter (Cmd+Shift+Enter on a Mac: a new foreground tab) for a
+// new tab's search.
 function enterWaitsForResults(): void {
   const forwarded = new WeakSet<Event>()
   document.addEventListener(
@@ -401,7 +407,7 @@ function enterWaitsForResults(): void {
       if (!(target instanceof HTMLElement) || !box) return
       e.preventDefault()
       e.stopImmediatePropagation()
-      const newTab = searchingForNewTab && !(e.ctrlKey && e.shiftKey)
+      const newTab = searchingForNewTab && !newTabKey(e)
       void resultsReady(box).then(() => {
         if (newTab) endNewTabSearch(true)
         const enter = new KeyboardEvent('keydown', {
@@ -410,10 +416,10 @@ function enterWaitsForResults(): void {
           bubbles: true,
           composed: true,
           cancelable: true,
-          ctrlKey: e.ctrlKey || newTab,
+          ctrlKey: e.ctrlKey || (newTab && !mac),
           shiftKey: e.shiftKey || newTab,
           altKey: e.altKey,
-          metaKey: e.metaKey
+          metaKey: e.metaKey || (newTab && mac)
         })
         forwarded.add(enter)
         target.dispatchEvent(enter)
