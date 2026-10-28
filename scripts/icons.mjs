@@ -2,6 +2,7 @@
 // Renders Grove's icons from branding/grove.svg (needs rsvg-convert):
 //   branding/png/grove-<size>.png   the Linux icon theme sizes
 //   branding/grove.icns             the macOS app icon
+//   branding/grove.ico              the Windows icon (Grove.exe, chrome.exe)
 // The results are committed, so building a release doesn't need this.
 //
 //   node scripts/icons.mjs
@@ -47,4 +48,23 @@ const head = Buffer.alloc(8)
 head.write('icns', 0, 'ascii')
 head.writeUInt32BE(body.length + 8, 4)
 writeFileSync(`${dir}grove.icns`, Buffer.concat([head, body]))
-console.log(`icons: ${SIZES.length} PNGs and grove.icns in branding/`)
+
+// An .ico: a header, a 16-byte entry per image (256 is written as 0), then
+// the images, here PNGs.
+const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+const ico = Buffer.alloc(6 + 16 * ICO_SIZES.length)
+ico.writeUInt16LE(1, 2)
+ico.writeUInt16LE(ICO_SIZES.length, 4)
+let offset = ico.length
+ICO_SIZES.forEach((size, i) => {
+  const e = 6 + 16 * i
+  ico.writeUInt8(size % 256, e)
+  ico.writeUInt8(size % 256, e + 1)
+  ico.writeUInt16LE(1, e + 4)
+  ico.writeUInt16LE(32, e + 6)
+  ico.writeUInt32LE(pngs.get(size).length, e + 8)
+  ico.writeUInt32LE(offset, e + 12)
+  offset += pngs.get(size).length
+})
+writeFileSync(`${dir}grove.ico`, Buffer.concat([ico, ...ICO_SIZES.map((s) => pngs.get(s))]))
+console.log(`icons: ${SIZES.length} PNGs, grove.icns and grove.ico in branding/`)

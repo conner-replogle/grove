@@ -1,7 +1,8 @@
 # Builds and publishes a Grove release when scripts/release.sh pushes a
 # v* tag: the UI tarball (what most updates download), a bundle per
-# platform (scripts/bundle.mjs; what the installer and full updates
-# download), the macOS DMGs, install.sh and SHA256SUMS over all of them.
+# platform (scripts/bundle.mjs; what the installers and full updates
+# download), the macOS DMGs, install.sh, install.ps1 and SHA256SUMS over
+# all of them.
 # The release is published only once every platform has built.
 name: Release
 
@@ -48,8 +49,26 @@ jobs:
           name: macos
           path: release/*
 
+  # Windows bundles build on Linux: Go cross-compiles Grove.exe.
+  windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/bundle.mjs windows-x64
+      - run: node scripts/bundle.mjs windows-arm64
+      - uses: actions/upload-artifact@v5
+        with:
+          name: windows
+          path: release/*
+
   publish:
-    needs: [linux, macos]
+    needs: [linux, macos, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -63,7 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp packaging/install.sh release/
+          cp packaging/install.sh packaging/windows/install.ps1 release/
           cd release
           sha256sum -- * > SHA256SUMS
           previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"

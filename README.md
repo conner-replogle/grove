@@ -32,16 +32,32 @@ curl -fsSL https://github.com/conner-replogle/grove/releases/latest/download/ins
 
 installs the latest release for Linux (x64, arm64) or macOS (Apple
 silicon, Intel): on Linux in `~/.local/opt/grove` with a desktop entry and
-icons, on macOS as `Grove.app` (a DMG is in every release too). A
+icons, on macOS as `Grove.app` (a DMG is in every release too). On Windows
+(x64, arm64), in PowerShell:
+
+```powershell
+irm https://github.com/conner-replogle/grove/releases/latest/download/install.ps1 | iex
+```
+
+installs it in `%LOCALAPPDATA%\Programs\Grove` with a Start menu shortcut and
+an entry in Settings > Apps that uninstalls it (no administrator rights). A
 release bundles everything Grove needs: a pinned ungoogled-chromium and
 Node (`packaging/pins.json`) and Grove itself, under Grove's name and icon
 (`branding/`, made by `scripts/icons.mjs`). The Mac app is signed ad hoc,
 not with an Apple Developer ID.
 
-The bundle's start script (`packaging/linux/grove`, `packaging/macos/Grove`)
-runs Grove from a copy of its app in the user's data directory
-(`~/.local/share/grove`, `~/Library/Application Support/Grove`), which is
-what updates replace.
+The bundle's start script (`packaging/linux/grove`, `packaging/macos/Grove`,
+on Windows `Grove.exe`, built from `packaging/windows/main.go`) runs Grove
+from a copy of its app in the user's data directory (`~/.local/share/grove`,
+`~/Library/Application Support/Grove`, `%LOCALAPPDATA%\Grove`), which is what
+updates replace. On Windows the profile is `%LOCALAPPDATA%\Grove\User Data`,
+the log `%LOCALAPPDATA%\Grove\grove.log`, and `grove.cmd` in the install
+folder runs `grove sync`.
+
+Not on Windows yet: Web Store extensions last only until Grove restarts
+(Chrome there takes outside installs only from a registry key every
+Chromium browser on the computer shares, Google Chrome included), and Grove
+isn't offered as a default browser.
 
 `./install.sh` is the developer's install: this checkout, with the system
 Chromium and mise's Node.
@@ -56,7 +72,7 @@ The tag starts the Release workflow (`.github/workflows/release.yml`), which
 builds the UI tarball `grove-ui-<version>.tar.gz`, a bundle per platform
 (`scripts/bundle.mjs`) and the DMGs, and publishes them with `install.sh`
 and `SHA256SUMS`. `node scripts/bundle.mjs linux-x64` builds one locally
-(macOS bundles need macOS).
+(macOS bundles need macOS; Windows bundles need Go, and build anywhere).
 
 An installed Grove checks GitHub's latest release a minute after launch and
 every six hours, and offers it at the bottom of the sidebar. Most updates

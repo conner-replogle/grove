@@ -17,6 +17,14 @@
     "macos-x64": {
       "url": "https://github.com/ungoogled-software/ungoogled-chromium-macos/releases/download/155.0.8059.84-1.1/ungoogled-chromium_155.0.8059.84-1.1_x86_64-macos.dmg",
       "sha256": "1123f91bb16e67558ab961974527d3c8b24d5d1f05e7a249430f2caae3530130"
+    },
+    "windows-x64": {
+      "url": "https://github.com/ungoogled-software/ungoogled-chromium-windows/releases/download/155.0.8059.84-1.1/ungoogled-chromium_155.0.8059.84-1.1_windows_x64.zip",
+      "sha256": "ce4697b197faf3f8f7cb4838832930bdbd3f8c5be48a0e95dea9457c8293fab0"
+    },
+    "windows-arm64": {
+      "url": "https://github.com/ungoogled-software/ungoogled-chromium-windows/releases/download/155.0.8059.84-1.1/ungoogled-chromium_155.0.8059.84-1.1_windows_arm64.zip",
+      "sha256": "d087d0a7ab0575f14668734103b2d009cad729c550c5b50655ca16d045cec4d6"
     }
   },
   "node": {
@@ -36,6 +44,14 @@
     "macos-x64": {
       "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-darwin-x64.tar.xz",
       "sha256": "49950999366bf6cd47c8c8fd3593aa82fb5efed494937b380b85677338285ca0"
+    },
+    "windows-x64": {
+      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-win-x64.zip",
+      "sha256": "cf02f5d0c06c794b84f277177d5cf3743d0924ca49f6641cd435dd7cb6ee9085"
+    },
+    "windows-arm64": {
+      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-win-arm64.zip",
+      "sha256": "a4e8362e268f1fcf1735f046e0adb088b28eeb400fb1c33fe5cc94d1a3d42570"
     }
   }
 }

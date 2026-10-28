@@ -144,7 +144,12 @@ function run(cmd: string, args: string[]): Promise<void> {
 
 // Opens a file's folder, the file selected where the system can.
 export function reveal(path: string): void {
-  const [cmd, args] = process.platform === 'darwin' ? ['open', ['-R', path]] : ['xdg-open', [join(path, '..')]]
+  const [cmd, args] =
+    process.platform === 'darwin'
+      ? ['open', ['-R', path]]
+      : process.platform === 'win32'
+        ? ['explorer.exe', [`/select,${path}`]]
+        : ['xdg-open', [join(path, '..')]]
   spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref()
 }
 

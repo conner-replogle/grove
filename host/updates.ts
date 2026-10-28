@@ -71,12 +71,12 @@ export function compareVersions(a: string, b: string): number {
 
 export const assetName = (version: string): string => `grove-ui-${version.replace(/^v/, '')}.tar.gz`
 export const bundleAssetName = (version: string, platform: string): string =>
-  `grove-${version.replace(/^v/, '')}-${platform}.tar.xz`
+  `grove-${version.replace(/^v/, '')}-${platform}.${platform.startsWith('windows') ? 'zip' : 'tar.xz'}`
 export const pinsAssetName = (version: string): string => `grove-${version.replace(/^v/, '')}.json`
 
 // This machine, as bundles are named.
 export const currentPlatform = (): string =>
-  `${process.platform === 'darwin' ? 'macos' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
+  `${{ darwin: 'macos', win32: 'windows' }[process.platform as string] ?? 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
 
 // What a bundle ships: its bundle.json (scripts/bundle.mjs).
 export interface BundleInfo {
@@ -233,7 +233,7 @@ export class Updater {
 
   // Unpacks the release's bundle for this platform as <bundle>.new, beside
   // the installed one (same filesystem, so the start script's swap is two
-  // renames).
+  // renames). Windows' own tar reads the .zip.
   private async installBundle(release: Release, version: string, sums: Map<string, string>, work: string): Promise<void> {
     const bundle = this.bundleDir!
     const name = bundleAssetName(version, this.platform)
@@ -245,8 +245,8 @@ export class Updater {
       const file = await this.download(asset, work, sums)
       rmSync(unpack, { recursive: true, force: true })
       mkdirSync(unpack, { recursive: true })
-      await run('tar', ['-xJf', file, '-C', unpack])
-      const top = join(unpack, bundle.endsWith('.app') ? 'Grove.app' : 'grove')
+      await run('tar', [file.endsWith('.zip') ? '-xf' : '-xJf', file, '-C', unpack])
+      const top = join(unpack, bundle.endsWith('.app') ? 'Grove.app' : this.platform.startsWith('windows') ? 'Grove' : 'grove')
       if (readBundleInfo(top)?.version !== version) throw new Error(`${name} isn't a Grove ${version} bundle`)
       rmSync(staged, { recursive: true, force: true })
       renameSync(top, staged)

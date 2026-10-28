@@ -5,26 +5,28 @@
 //
 //   node scripts/bundle.mjs <platform> [--out <dir>]
 //
-// <platform> is linux-x64, linux-arm64, macos-arm64 or macos-x64. Writes to
-// <dir> (default release/):
+// <platform> is linux-x64, linux-arm64, macos-arm64, macos-x64, windows-x64
+// or windows-arm64. Writes to <dir> (default release/):
 //   grove-<version>-<platform>.tar.xz   the bundle (what installers and the
-//                                       updater unpack)
+//                                       updater unpack; on Windows a .zip)
 //   Grove-<version>-<platform>.dmg      macOS only: drag to Applications
 //   grove-<version>.json                what the release pins (the updater
 //                                       reads it to choose a full update)
 //
 // A Linux bundle can be built anywhere; a macOS one needs macOS (hdiutil,
-// plutil, codesign). Downloads are cached in ~/.cache/grove-bundle.
+// plutil, codesign); a Windows one needs Go (Grove.exe and the icons, from
+// packaging/windows) and, off Windows, unzip and zip. Downloads are cached
+// in ~/.cache/grove-bundle.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { holdWebiumUi } from './webium-pak.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const PLATFORMS = ['linux-x64', 'linux-arm64', 'macos-arm64', 'macos-x64']
+const PLATFORMS = ['linux-x64', 'linux-arm64', 'macos-arm64', 'macos-x64', 'windows-x64', 'windows-arm64']
 // What the launcher needs of the checkout (as install.sh copies it).
 const APP_FILES = ['launcher', 'host', 'shared', 'extension', 'dist', 'package.json']
 
@@ -37,6 +39,7 @@ if (!platform) {
   process.exit(1)
 }
 const mac = platform.startsWith('macos')
+const windows = platform.startsWith('windows')
 if (mac && process.platform !== 'darwin') {
   console.error('a macOS bundle needs macOS (hdiutil, codesign)')
   process.exit(1)
@@ -80,6 +83,10 @@ function copyApp(to) {
   for (const f of APP_FILES) cpSync(join(root, f), join(to, f), { recursive: true })
 }
 
+// A .zip, with the system's tar on Windows (bsdtar reads zips).
+const unzip = (file, to) =>
+  process.platform === 'win32' ? run('tar', ['-xf', file, '-C', to]) : run('unzip', ['-q', file, '-d', to])
+
 // Node's binary and licence, out of its release tarball.
 function unpackNode(to) {
   const top = basename(node).replace(/\.tar\.xz$/, '')
@@ -87,8 +94,55 @@ function unpackNode(to) {
   run('tar', ['-xJf', node, '-C', to, '--strip-components=1', `${top}/bin/node`, `${top}/LICENSE`])
 }
 
+// Grove.exe (packaging/windows), with Grove's icon, for the Windows GUI
+// subsystem: it starts Node with no console window.
+const GO_WINRES = 'github.com/tc-hib/go-winres@v0.3.3'
+function buildGroveExe(to) {
+  const src = join(stage, 'grove-exe')
+  cpSync(join(root, 'packaging/windows'), src, { recursive: true, filter: (f) => !f.endsWith('.ps1') })
+  const goarch = platform.endsWith('arm64') ? 'arm64' : 'amd64'
+  const winVersion = `${version.split(/[-+]/)[0]}.0`
+  run('go', ['run', GO_WINRES, 'simply', '--arch', goarch, '--out', join(src, 'rsrc'), '--manifest', 'gui',
+    '--icon', join(root, 'branding/grove.ico'), '--product-name', 'Grove', '--file-description', 'Grove',
+    '--product-version', winVersion, '--file-version', winVersion, '--original-filename', 'Grove.exe'], { cwd: src })
+  run('go', ['build', '-trimpath', '-ldflags=-H=windowsgui -s -w', '-o', to, '.'], {
+    cwd: src,
+    env: { ...process.env, GOOS: 'windows', GOARCH: goarch, CGO_ENABLED: '0' }
+  })
+}
+
+// Chrome draws its windows' and taskbar button's icon from its own
+// IDR_MAINFRAME: make that Grove's.
+function brandChrome(exe) {
+  const dir = join(stage, 'chrome-icon')
+  mkdirSync(dir, { recursive: true })
+  cpSync(join(root, 'branding/grove.ico'), join(dir, 'grove.ico'))
+  writeFileSync(join(dir, 'winres.json'), JSON.stringify({ RT_GROUP_ICON: { IDR_MAINFRAME: { '0409': 'grove.ico' } } }))
+  run('go', ['run', GO_WINRES, 'patch', '--in', join(dir, 'winres.json'), '--no-backup', exe])
+}
+
 let product
-if (!mac) {
+if (windows) {
+  const dir = join(stage, 'Grove')
+  const unpacked = join(stage, 'unpacked')
+  mkdirSync(unpacked, { recursive: true })
+  unzip(chromium, unpacked)
+  mkdirSync(dir, { recursive: true })
+  renameSync(join(unpacked, basename(chromium, '.zip')), join(dir, 'chromium'))
+  // No flash of Webium's own UI in new windows (webium-pak.mjs).
+  holdWebiumUi(join(dir, 'chromium/resources.pak'))
+  brandChrome(join(dir, 'chromium/chrome.exe'))
+  unzip(node, unpacked)
+  const nodeTop = join(unpacked, basename(node, '.zip'))
+  mkdirSync(join(dir, 'node'))
+  for (const f of ['node.exe', 'LICENSE']) cpSync(join(nodeTop, f), join(dir, 'node', f))
+  copyApp(join(dir, 'app'))
+  buildGroveExe(join(dir, 'Grove.exe'))
+  for (const f of ['grove.cmd', 'uninstall.ps1']) cpSync(join(root, 'packaging/windows', f), join(dir, f))
+  cpSync(join(root, 'branding/grove.ico'), join(dir, 'grove.ico'))
+  writeFileSync(join(dir, 'bundle.json'), bundleInfo)
+  product = 'Grove'
+} else if (!mac) {
   const dir = join(stage, 'grove')
   mkdirSync(join(dir, 'chromium'), { recursive: true })
   run('tar', ['-xJf', chromium, '-C', join(dir, 'chromium'), '--strip-components=1'])
@@ -141,9 +195,12 @@ if (!mac) {
 }
 
 mkdirSync(out, { recursive: true })
-const tarball = join(out, `grove-${version}-${platform}.tar.xz`)
+const tarball = join(out, `grove-${version}-${platform}.${windows ? 'zip' : 'tar.xz'}`)
 console.log(`packing ${basename(tarball)}`)
-run('tar', ['-cJf', tarball, '-C', stage, product], { env: { ...process.env, XZ_OPT: '-T0 -6' } })
+rmSync(tarball, { force: true })
+if (!windows) run('tar', ['-cJf', tarball, '-C', stage, product], { env: { ...process.env, XZ_OPT: '-T0 -6' } })
+else if (process.platform === 'win32') run('tar', ['-a', '-cf', tarball, '-C', stage, product])
+else run('zip', ['-qrX9', tarball, product], { cwd: stage })
 if (mac) {
   const dmgRoot = join(stage, 'dmg')
   mkdirSync(dmgRoot)

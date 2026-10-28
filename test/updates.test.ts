@@ -16,6 +16,13 @@ describe('compareVersions', () => {
   })
 })
 
+describe('bundleAssetName', () => {
+  it('names a Windows bundle a .zip, the others .tar.xz', () => {
+    expect(bundleAssetName('v0.6.0', 'windows-x64')).toBe('grove-0.6.0-windows-x64.zip')
+    expect(bundleAssetName('0.6.0', 'linux-arm64')).toBe('grove-0.6.0-linux-arm64.tar.xz')
+  })
+})
+
 // A fake GitHub API serving one release whose asset is a real tarball.
 describe('Updater', () => {
   let dir: string

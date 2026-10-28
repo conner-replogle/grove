@@ -5,10 +5,12 @@
 // update service for the current Widevine, checks the download (the hash
 // the service gives, and the CRX's signature by Widevine's key), unpacks
 // it into <profile>/WidevineCdm/<version> and points Chromium's hint file
-// at it. Chromium reads the hint at start-up, so a new Widevine is used
-// from the next start on, as with Chrome's own updater.
+// at it. Chromium reads the hint at start-up (on Windows its component
+// installer finds the newest version there itself), so a new Widevine is
+// used from the next start on, as with Chrome's own updater.
 //
-// Linux only: on macOS Chromium looks for it inside its own app bundle.
+// Linux and Windows: on macOS Chromium looks for it inside its own app
+// bundle.
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -23,6 +25,8 @@ export interface WidevineOptions {
   profile: string
   chromeVersion: () => string
   arch?: string
+  // 'linux' or 'win' (default: this computer's).
+  os?: string
   log?: (...a: unknown[]) => void
   fetch?: typeof fetch
 }
@@ -107,14 +111,18 @@ export class Widevine {
 
   private async check(version: string) {
     const arch = this.o.arch ?? (process.arch === 'arm64' ? 'arm64' : 'x64')
+    const os = this.o.os ?? (process.platform === 'win32' ? 'win' : 'linux')
     const body = {
       request: {
-        '@os': 'linux',
+        '@os': os,
         '@updater': 'chromium',
         acceptformat: 'crx3',
         app: [{ appid: WIDEVINE_ID, version, updatecheck: {} }],
         arch,
-        os: { arch: arch === 'arm64' ? 'aarch64' : 'x86_64', platform: 'Linux', version: '6.0' },
+        os:
+          os === 'win'
+            ? { arch: arch === 'arm64' ? 'arm64' : 'x86_64', platform: 'Windows', version: '10.0.26100.0' }
+            : { arch: arch === 'arm64' ? 'aarch64' : 'x86_64', platform: 'Linux', version: '6.0' },
         prodversion: this.o.chromeVersion(),
         protocol: '3.1',
         requestid: `{${randomUUID()}}`,

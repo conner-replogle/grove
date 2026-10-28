@@ -22,7 +22,8 @@
 //                  own C++ workspace service restores and mirrors tabs
 //                  itself and fights this host)
 //   GROVE_PROFILE  the profile directory  (default ~/.config/grove-webium,
-//                  on macOS ~/Library/Application Support/Grove/Profile)
+//                  on macOS ~/Library/Application Support/Grove/Profile, on
+//                  Windows %LOCALAPPDATA%\Grove\User Data)
 //
 // An installed bundle's start script (packaging/) also sets GROVE_BUNDLE,
 // the bundle the updater may replace, and GROVE_RELAUNCH, what restarts it.
@@ -49,9 +50,19 @@ import { PipeCDP } from './cdp.mjs'
 
 const home = homedir()
 const mac = process.platform === 'darwin'
-const CHROME = process.env.GROVE_CHROME ?? (mac ? '/Applications/Chromium.app/Contents/MacOS/Chromium' : '/usr/bin/chromium')
+const win = process.platform === 'win32'
+// Grove's own folder in %LOCALAPPDATA% on Windows (packaging/windows).
+const winData = join(process.env.LOCALAPPDATA ?? join(home, 'AppData/Local'), 'Grove')
+const CHROME =
+  process.env.GROVE_CHROME ??
+  (mac
+    ? '/Applications/Chromium.app/Contents/MacOS/Chromium'
+    : win
+      ? join(process.env.LOCALAPPDATA ?? '', 'Chromium/Application/chrome.exe')
+      : '/usr/bin/chromium')
 const PROFILE =
-  process.env.GROVE_PROFILE ?? (mac ? `${home}/Library/Application Support/Grove/Profile` : `${home}/.config/grove-webium`)
+  process.env.GROVE_PROFILE ??
+  (mac ? `${home}/Library/Application Support/Grove/Profile` : win ? join(winData, 'User Data') : `${home}/.config/grove-webium`)
 const FEATURES = 'Webium,SurfaceEmbed,ExtensionsMenuAccessControl'
 const BUNDLE = fileURLToPath(new URL('../dist/grove-ui.js', import.meta.url))
 const EXTENSION_SOURCE = fileURLToPath(new URL('../extension', import.meta.url))
@@ -79,6 +90,16 @@ const log = (...a) => (dev ? console.log('[grove]', ...a) : debug.record('host',
 // (a new window, a URL) to it and exits. Leave that instance's profile and
 // workspaces alone: no host here, just the handoff.
 function runningPid() {
+  // Chrome on Windows holds the profile's lockfile open, unshared: it
+  // can't be deleted while Chrome runs (and a stale one may as well go).
+  if (win) {
+    try {
+      rmSync(join(PROFILE, 'lockfile'), { force: true })
+      return undefined
+    } catch {
+      return -1
+    }
+  }
   try {
     const [host, pid] = readlinkSync(join(PROFILE, 'SingletonLock')).split(/-(?=\d+$)/)
     if (host !== hostname()) return undefined
@@ -111,9 +132,17 @@ if (runningPid()) {
 // file changes. The folder stays put, so the extension keeps its id.
 const BRIDGE_DIR = join(PROFILE, 'Grove Bridge')
 
-// The id Chrome gives an unpacked extension: from its folder's path.
+// The id Chrome gives an unpacked extension: from its folder's path (on
+// Windows the UTF-16 path, drive letter in capitals).
 const unpackedId = (dir) =>
-  [...createHash('sha256').update(dir).digest('hex').slice(0, 32)].map((h) => String.fromCharCode(97 + parseInt(h, 16))).join('')
+  [
+    ...createHash('sha256')
+      .update(win ? Buffer.from(dir.replace(/^[a-z]:/, (d) => d.toUpperCase()), 'utf16le') : dir)
+      .digest('hex')
+      .slice(0, 32)
+  ]
+    .map((h) => String.fromCharCode(97 + parseInt(h, 16)))
+    .join('')
 
 function prepareBridge() {
   const dir = BRIDGE_DIR
@@ -178,7 +207,7 @@ function prepareProfile() {
   // the user put something else on them.
   const commands = (prefs.extensions = { ...prefs.extensions, commands: { ...prefs.extensions?.commands } }).commands
   for (const [letter, command_name] of [['N', 'new-blank-window'], ['P', 'new-private-window']]) {
-    const key = mac ? `mac:Command+Shift+${letter}` : `${process.platform === 'win32' ? 'windows' : 'linux'}:Ctrl+Shift+${letter}`
+    const key = mac ? `mac:Command+Shift+${letter}` : `${win ? 'windows' : 'linux'}:Ctrl+Shift+${letter}`
     if (!commands[key]) commands[key] = { command_name, extension: unpackedId(BRIDGE_DIR), global: false }
   }
   writeFileSync(file, JSON.stringify(prefs))
@@ -199,14 +228,15 @@ prepareProfile()
 const EXTENSION = prepareBridge()
 
 // The user's own Chrome flags, one or more to a line (# comments), from
-// $XDG_CONFIG_HOME/grove-flags.conf, as Arch's chromium reads
-// chromium-flags.conf: --password-store=gnome-libsecret, say, where
-// Chrome can't tell which keyring the desktop has.
+// $XDG_CONFIG_HOME/grove-flags.conf (on Windows %LOCALAPPDATA%\Grove\),
+// as Arch's chromium reads chromium-flags.conf: --password-store=
+// gnome-libsecret, say, where Chrome can't tell which keyring the desktop
+// has.
 function userFlags() {
   try {
-    const file = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'grove-flags.conf')
+    const file = join(win ? winData : process.env.XDG_CONFIG_HOME || join(home, '.config'), 'grove-flags.conf')
     return readFileSync(file, 'utf8')
-      .split('\n')
+      .split(/\r?\n/)
       .map((l) => l.replace(/#.*/, '').trim())
       .flatMap((l) => (l ? l.split(/\s+/) : []))
   } catch {
@@ -439,7 +469,7 @@ extensions.start()
 setTimeout(() => void fetchDictionaries(PROFILE, (...a) => console.log('[grove]', ...a)), 30_000)
 
 // Widevine for DRM video and music, fetched as Chrome would (host/widevine.ts).
-if (process.platform === 'linux') {
+if (process.platform === 'linux' || win) {
   new Widevine({ profile: PROFILE, chromeVersion: () => chromeVersion, log: (...a) => console.log('[grove]', ...a) }).start()
 }
 
@@ -769,11 +799,11 @@ if (dev) {
   // Evaluate JS in the windows' UI (or, at /bridge, in the bridge extension)
   // from a shell, over a socket only this user can open:
   //   curl --unix-socket $XDG_RUNTIME_DIR/grove-ui-dev.sock -d '<js>' http://ui/eval
-  // or send one raw CDP command at /cdp.
+  // (on Windows the named pipe \\.\pipe\grove-ui-dev), or send one raw CDP
+  // command at /cdp.
   const { createServer } = await import('node:http')
-  const { rmSync } = await import('node:fs')
-  const socket = `${process.env.XDG_RUNTIME_DIR ?? '/tmp'}/grove-ui-dev.sock`
-  rmSync(socket, { force: true })
+  const socket = win ? '\\\\.\\pipe\\grove-ui-dev' : `${process.env.XDG_RUNTIME_DIR ?? '/tmp'}/grove-ui-dev.sock`
+  if (!win) rmSync(socket, { force: true })
   createServer(async (req, res) => {
     let body = ''
     for await (const chunk of req) body += chunk
@@ -797,7 +827,10 @@ if (dev) {
     }
     res.end(JSON.stringify(out, null, 1) + '\n')
   }).listen(socket)
+}
 
+// Rebuilding needs the checkout's src/ (an installed app has only dist/).
+if (dev && existsSync(fileURLToPath(new URL('../src', import.meta.url)))) {
   const esbuild = await import('esbuild')
   const { options } = await import('../build.mjs')
   const ctx = await esbuild.context({
