@@ -334,6 +334,35 @@ describe('sync between devices', () => {
     for (const d of [laptop, mac, phone]) d.client.stop()
   })
 
+  it('keeps what other devices made while this one was offline', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grove-sync-'))
+    const server: Server = { room: new Room(new MemoryStore()), peers: new Set(), queue: Promise.resolve() }
+    const secret = newSecret()
+    const laptop = new Device('laptop', model({ Home: ['*mail', '*news', 'ci'] }), secret, server, dir)
+    await laptop.client.start()
+    await settle()
+    const mac = new Device('mac', M.emptyModel(), secret, server, dir)
+    await mac.client.start()
+    await settle()
+
+    mac.socket!.close()
+    await settle()
+    // Separate changes, so the mac catches up on several of them.
+    const home = laptop.model.workspaces[0].id
+    laptop.edit((m) => M.withWorkspace(m, home, (w) => M.createGroup(w, [w.entries[0].id])[0]))
+    await settle()
+    laptop.edit((m) => M.withWorkspace(m, home, (w) => M.setEntryGroup(w, w.entries[1].id, w.groups[0].id)))
+    await settle()
+    laptop.edit((m) => M.withWorkspace(m, home, (w) => M.addEntry(w, { url: 'https://docs.test/', title: 'docs' }, { pinned: true })[0]))
+    await settle()
+    await new Promise((r) => setTimeout(r, 1100)) // reconnect backoff
+    await settle()
+
+    expect(look(laptop.model).workspaces[0].tabs).toEqual(['*mail[New Folder]', '*news[New Folder]', '*docs', 'ci'])
+    expect(look(mac.model)).toEqual(look(laptop.model))
+    for (const d of [laptop, mac]) d.client.stop()
+  })
+
   it('turns away a device with the wrong token', async () => {
     const store = new MemoryStore()
     const room = new Room(store)

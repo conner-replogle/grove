@@ -152,6 +152,11 @@ export class SyncClient {
   // Caught up with the server on the current connection.
   private ready = false
   private needsApply = false
+  // Changes received while catching up after a reconnect, kept out of the
+  // records until caught up: local changes are committed against the
+  // records meanwhile, and a model that hasn't seen these changes would
+  // read everything in them as removed.
+  private catchUp?: { records: Records; seq: number }
   private resumed = false
   // When this device last recorded where the user was, as of launch; and
   // the latest place other devices have reported since.
@@ -268,16 +273,19 @@ export class SyncClient {
       this.queue = this.queue.then(() => this.handle(msg)).catch((e: unknown) => this.log('sync:', e))
     }
     socket.onerror = () => {}
-    socket.onclose = () => {
+    socket.onclose = (ev) => {
       if (this.socket !== socket) return
+      const { code, reason } = (ev ?? {}) as { code?: number; reason?: string }
+      const why = code ? ` (${code}${reason ? ` ${reason}` : ''}${this.ready ? '' : ', before ready'})` : ''
       this.socket = undefined
       this.ready = false
+      this.catchUp = undefined // the server sends them again
       for (const ids of this.inflight.values()) ids.forEach((id) => this.pending.add(id))
       this.inflight.clear()
       if (this.stopped) return
       if (this.fatal) return this.setConnection('error')
       this.setConnection('offline')
-      this.log(`sync: offline, retrying in ${this.retryMs / 1000}s`)
+      this.log(`sync: offline${why}, retrying in ${this.retryMs / 1000}s`)
       this.retryTimer = setTimeout(() => this.open(), this.retryMs)
       this.retryMs = Math.min(this.retryMs * 2, 60_000)
     }
@@ -311,9 +319,18 @@ export class SyncClient {
           this.needsApply = false
           await this.host.apply(model, remap)
           this.log('sync: joined')
-        } else if (this.needsApply) {
-          this.needsApply = false
-          await this.applyRemote()
+        } else {
+          this.commitLocal()
+          const caught = this.catchUp
+          this.catchUp = undefined
+          if (caught) {
+            if (merge(this.records, caught.records)) this.needsApply = true
+            this.cursor = Math.max(this.cursor, caught.seq)
+          }
+          if (this.needsApply) {
+            this.needsApply = false
+            await this.applyRemote()
+          }
         }
         this.commitLocal()
         this.saveSoon()
@@ -358,6 +375,12 @@ export class SyncClient {
     if (this.joined) this.commitLocal()
     for (const rec of incoming.values()) for (const [, stamp] of Object.values(rec.f)) this.clock.observe(stamp)
     this.noteElsewhere(incoming)
+    if (this.joined && !this.ready) {
+      const caught = (this.catchUp ??= { records: new Map(), seq: this.cursor })
+      merge(caught.records, incoming)
+      caught.seq = Math.max(caught.seq, seq)
+      return
+    }
     const changed = merge(this.records, incoming)
     this.cursor = Math.max(this.cursor, seq)
     this.saveSoon()
