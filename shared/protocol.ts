@@ -9,6 +9,9 @@ export interface EntryView {
   url: string
   // The page's own icon URL, once Chrome has seen it.
   favicon?: string
+  // The icon as a data URL, for a tab not open in Chrome (whose favicon
+  // cache often lacks it), once Grove has fetched it.
+  faviconData?: string
   pinned: boolean
   groupId?: string
   // The split view it's in.
@@ -261,6 +264,7 @@ export type HostCommand =
   | { type: 'newFolder'; entryId: string }
   | { type: 'toggleFolder'; groupId: string }
   | { type: 'ungroup'; groupId: string }
+  | { type: 'renameFolder'; groupId: string; title: string }
   | { type: 'deleteFolder'; groupId: string }
   | { type: 'setFolderPinned'; groupId: string; pinned: boolean }
   // Drag and drop: `beforeId` is the entry the dragged one lands in front

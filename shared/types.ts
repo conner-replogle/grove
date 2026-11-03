@@ -95,6 +95,9 @@ export interface Workspace {
   // A private (incognito) window's: blank, and its tabs can't leave it for
   // a workspace.
   private?: true
+  // The tabs local agents drive (host/agents.ts): a workspace windows can
+  // switch to, to watch them, but never saved or synced.
+  agent?: true
 }
 
 export interface Model {

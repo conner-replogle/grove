@@ -17,6 +17,7 @@ import { organize as runOrganize, type AiRunner } from './organize-ai.ts'
 import { storeExtensionId } from './webstore.ts'
 import { PageTranslation } from './translate.ts'
 import type { Settings } from './settings.ts'
+import type { Favicons } from './favicons.ts'
 import { keptByHost, type SitePermissions } from './site-permissions.ts'
 import type { Store } from './store.ts'
 
@@ -36,7 +37,8 @@ export interface BridgeTab {
 
 export type BridgeEvent =
   // restoredSession: the user reopened a tab Grove had unloaded.
-  | { type: 'tabCreated'; tab: BridgeTab; requestId?: string; restoredSession?: string }
+  // targetId: its DevTools target (see agentOpener).
+  | { type: 'tabCreated'; tab: BridgeTab; requestId?: string; restoredSession?: string; targetId?: string }
   | { type: 'tabRemoved'; tabId: number; windowId: number; windowClosing: boolean }
   | { type: 'tabUpdated'; tab: BridgeTab }
   | { type: 'tabActivated'; tabId: number; windowId: number }
@@ -71,7 +73,13 @@ export interface UiSink {
   suggestions(windowId: number, input: string, suggestions: HistorySuggestion[]): void
   // A left click at (x, y) in the window's UI, as the user's own would be.
   click(windowId: number, x: number, y: number): void
+  // What has the window's keyboard, the UI or its page (see agentInput),
+  // and giving it back to that.
+  keyboard(windowId: number): Promise<KeyboardHolder | undefined>
+  restoreKeyboard(windowId: number, holder: KeyboardHolder): Promise<void>
 }
+
+export type KeyboardHolder = 'page' | 'ui'
 
 // Updates as the windows drive them (host/updates.ts).
 export interface UpdateControl {
@@ -200,6 +208,8 @@ export class GroveHost {
   // Told of every change the host makes to the model (sync records them).
   onModelChange?: () => void
   settings?: Settings
+  // Icons Chrome's favicon cache lacks (see EntryView.faviconData).
+  favicons?: Favicons
   sync?: SyncControl
   workersAi?: WorkersAiControl
   extensions?: ExtensionsControl
@@ -215,6 +225,12 @@ export class GroveHost {
   // returns its path, or shows one in its folder.
   debug?: { save(): Promise<string>; reveal(path: string): void }
   private debugStatus: DebugStatus = { saving: false }
+  // Agents (host/agents.ts): whether an agent drives an entry's page (it
+  // isn't unloaded then), and a page an agent's tab opened.
+  agentDriven?: (entryId: string) => boolean
+  onAgentTab?: (entryId: string, openerEntryId: string) => void
+  // The agent's entry whose page opened a page (by its DevTools target).
+  agentOpener?: (targetId: string) => string | undefined
   // An update offer the user put away, by version, until the next launch.
   private dismissedUpdate?: string
 
@@ -302,7 +318,7 @@ export class GroveHost {
     switch (e.type) {
       case 'tabCreated':
         this.queueOrder()
-        return this.onTabCreated(e.tab, e.requestId, e.restoredSession)
+        return this.onTabCreated(e.tab, e.requestId, e.restoredSession, e.targetId)
       case 'tabRemoved':
         this.queueOrder()
         return this.onTabRemoved(e.tabId, e.windowClosing)
@@ -426,7 +442,7 @@ export class GroveHost {
     return b
   }
 
-  private onTabCreated(tab: BridgeTab, requestId?: string, restoredSession?: string): void {
+  private onTabCreated(tab: BridgeTab, requestId?: string, restoredSession?: string, targetId?: string): void {
     this.tabWindow.set(tab.id, tab.windowId)
     // The first tab of a window the user opened: a page (not the new-tab
     // page) makes it a blank window, as Zen opens links in new windows.
@@ -457,6 +473,23 @@ export class GroveHost {
       // sleep (after a moment: closing a tab Chrome is still making
       // crashes Webium).
       else if (!this.shows(b, unloadedEntry)) setTimeout(() => void this.settle(unloadedEntry, true), 1000)
+      this.queuePush()
+      return
+    }
+    // A page an agent's tab opened (a link to a new tab, window.open): the
+    // agent's too, in the background.
+    const opener = targetId ? this.agentOpener?.(targetId) : undefined
+    const openerWs = opener ? M.workspaceOfEntry(this.model, opener) : undefined
+    if (opener && openerWs?.agent) {
+      let entry!: Entry
+      this.update((m) =>
+        M.withWorkspace(m, openerWs.id, (ws) => ([ws, entry] = M.addEntry(ws, { url: tab.url, title: tab.title }, { afterId: opener }))[0])
+      )
+      this.map(entry.id, tab.id)
+      const b = this.bindWindow(tab.windowId)
+      if (tab.active && this.shows(b, entry.id)) this.setActive(tab.windowId, b, entry.id)
+      else if (tab.active) this.reshow(tab.windowId)
+      this.onAgentTab?.(entry.id, opener)
       this.queuePush()
       return
     }
@@ -589,7 +622,11 @@ export class GroveHost {
     const entryId = this.entryOf.get(tabId)
     const b = this.windows.get(windowId)
     if (!entryId || !b) return
-    if (!this.shows(b, entryId)) return
+    if (!this.shows(b, entryId)) {
+      // An agent's page came forward on its own (a page's window.focus()).
+      if (M.workspaceOfEntry(this.model, entryId)?.agent) this.reshow(windowId)
+      return
+    }
     this.setActive(windowId, b, entryId)
     this.queuePush()
   }
@@ -640,6 +677,8 @@ export class GroveHost {
         })
       case 'ungroup':
         return this.editWorkspace(b, (ws) => M.ungroup(ws, c.groupId))
+      case 'renameFolder':
+        return this.editWorkspace(b, (ws) => M.updateGroup(ws, c.groupId, { title: c.title }))
       case 'deleteFolder': {
         // Closing its last tab removes the folder (normalize drops empty ones).
         const ws = M.getWorkspace(this.model, b.workspaceId)
@@ -1043,7 +1082,9 @@ export class GroveHost {
 
   // Windows on the workspace move to a neighbor first, which unloads it.
   private async deleteWorkspace(workspaceId: string): Promise<void> {
-    if (M.realWorkspaces(this.model).length <= 1 || this.blankWs(workspaceId)) return
+    // (The Agents workspace isn't one of the user's to leave them with.)
+    const own = M.realWorkspaces(this.model).filter((w) => !w.agent)
+    if (this.blankWs(workspaceId) || (own.length <= 1 && own[0]?.id === workspaceId)) return
     const next = M.neighborWorkspace(this.model, workspaceId, -1)
     for (const [windowId, b] of this.windows) {
       if (b.workspaceId === workspaceId) await this.switchWorkspace(windowId, next)
@@ -1210,6 +1251,93 @@ export class GroveHost {
     this.pushAll()
   }
 
+  // ---- Agents (host/agents.ts) ----
+
+  // Opens a page for an agent: a new entry in the Agents workspace (made
+  // the first time), its tab in the background of a window. Returns the
+  // entry's id.
+  async agentOpen(url: string): Promise<string> {
+    if (!this.bridge) throw new Error('Grove is still starting')
+    await this.started()
+    let wsId = this.model.workspaces.find((w) => w.agent)?.id
+    if (!wsId) this.update((m) => ([m, wsId] = M.createAgentWorkspace(m))[0])
+    let entry!: Entry
+    this.update((m) => M.withWorkspace(m, wsId!, (ws) => ([ws, entry] = M.addEntry(ws, { url, title: url }))[0]))
+    try {
+      await this.agentTab(entry.id)
+    } catch (e) {
+      this.closeEntries([entry.id])
+      throw e
+    }
+    return entry.id
+  }
+
+  // The tab of an agent's entry, opened again if it isn't open (its window
+  // closed, or Grove unloaded it).
+  async agentTab(entryId: string): Promise<number> {
+    const open = this.tabOf.get(entryId)
+    if (open !== undefined) return open
+    const entry = this.entry(entryId)
+    if (!entry || !M.workspaceOfEntry(this.model, entryId)?.agent) throw new Error('the tab was closed')
+    // A window on the Agents workspace, else the user's first window (not a
+    // private one: agents use the user's own profile).
+    const windows = [...this.windows].filter(([w]) => !this.incognito.has(w) && !this.closingWindows.has(w))
+    const on = windows.find(([, b]) => this.shows(b, entryId)) ?? windows.find(([w]) => !this.blankOf(w)) ?? windows[0]
+    if (!on) throw new Error('Grove has no window open')
+    const [windowId, b] = on
+    // A window on the Agents workspace showing nothing yet shows it.
+    const show = this.shows(b, entryId) && !b.activeEntryId
+    if (show) this.setActive(windowId, b, entryId)
+    await this.createTab(windowId, entry.url || 'about:blank', entryId, { active: show })
+    // (Its created event, which maps it, may come after the call returns.)
+    for (let i = 0; i < 100 && !this.tabOf.has(entryId); i++) await new Promise((r) => setTimeout(r, 50))
+    const tabId = this.tabOf.get(entryId)
+    if (tabId === undefined) throw new Error('Chrome did not open the tab')
+    await this.dropPlaceholders(windowId)
+    this.pushAll()
+    return tabId
+  }
+
+  // An agent's mouse press on its page. Chrome gives a page pressed on the
+  // keyboard of its window (FocusOwningWebContents), wherever it is, so the
+  // keyboard goes back at once to what had it: the user's page, or the
+  // window's UI. (Not while the user is watching the agent's tab.)
+  async agentPress(entryId: string, press: () => Promise<void>): Promise<void> {
+    const tabId = this.tabOf.get(entryId)
+    const windowId = tabId === undefined ? undefined : this.tabWindow.get(tabId)
+    const b = windowId === undefined ? undefined : this.windows.get(windowId)
+    if (windowId === undefined || !b || this.shownBy(b).includes(entryId)) return press()
+    const holder = await this.ui.keyboard(windowId).catch(() => undefined)
+    try {
+      await press()
+    } finally {
+      if (holder) await this.ui.restoreKeyboard(windowId, holder).catch((e: unknown) => this.log('keyboard', e))
+    }
+  }
+
+  async agentClose(entryIds: string[]): Promise<void> {
+    await this.closeEntriesEverywhere(entryIds.filter((id) => M.workspaceOfEntry(this.model, id)?.agent))
+  }
+
+  // An agent's entry and the URL and title Chrome last gave its page.
+  agentEntry(entryId: string): Entry | undefined {
+    return M.workspaceOfEntry(this.model, entryId)?.agent ? this.entry(entryId) : undefined
+  }
+
+  // Whether a window shows an entry now (the user is watching an agent).
+  isShown(entryId: string): boolean {
+    return [...this.windows.values()].some((b) => this.shownBy(b).includes(entryId))
+  }
+
+  // Chrome brought forward a page of a workspace this window doesn't show
+  // (an agent's): the window's own page comes back.
+  private reshow(windowId: number): void {
+    const b = this.windows.get(windowId)
+    const own = b?.activeEntryId ? this.tabOf.get(b.activeEntryId) : undefined
+    if (own === undefined || this.tabWindow.get(own) !== windowId) return
+    void this.bridge?.call('activate', own).catch(() => {})
+  }
+
   // ---- Internals ----
 
   private async showActive(windowId: number): Promise<void> {
@@ -1347,6 +1475,8 @@ export class GroveHost {
     for (const [entryId, tabId] of this.tabOf) {
       // Private tabs stay open (see PRIVATE_REFUSES).
       if (M.workspaceOfEntry(this.model, entryId)?.private) continue
+      // Nor does a page an agent is driving.
+      if (this.agentDriven?.(entryId)) continue
       const since = this.shownAt.get(tabId)
       if (since === undefined) this.shownAt.set(tabId, now)
       else if (now - since >= minutes * 60_000 && !this.audible.has(tabId) && !this.permissions.some((p) => p.tabId === tabId)) {
@@ -1374,7 +1504,7 @@ export class GroveHost {
   // folder that's there (one tab makes no new folder).
   private async organize(workspaceId: string, mode: 'button' | 'idle' | { entryId: string }): Promise<void> {
     const ws = this.model.workspaces.find((w) => w.id === workspaceId)
-    if (!ws || this.organizing.has(workspaceId)) return
+    if (!ws || ws.agent || this.organizing.has(workspaceId)) return
     const shown = new Set([...this.windows.values()].flatMap((b) => this.shownBy(b)))
     const tabs = looseTabs(ws).filter((e) =>
       mode === 'idle' ? !shown.has(e.id) : mode === 'button' || e.id === mode.entryId
@@ -1527,8 +1657,8 @@ export class GroveHost {
   // entry keep showing it.
   async applySynced(synced: Model, remap: ReadonlyMap<string, string>): Promise<void> {
     const prev = this.model
-    // Blank windows keep their own tabs.
-    const next = { ...synced, workspaces: [...synced.workspaces, ...prev.workspaces.filter((w) => w.blank)] }
+    // Blank windows keep their own tabs, and agents theirs.
+    const next = { ...synced, workspaces: [...synced.workspaces, ...prev.workspaces.filter((w) => w.blank || w.agent)] }
     const idsOf = (m: Model) => new Set([...m.essentials, ...m.workspaces.flatMap((w) => w.entries)].map((e) => e.id))
     const kept = idsOf(next)
     const gone = [...idsOf(prev)].filter((id) => !kept.has(id))
@@ -1687,6 +1817,7 @@ export class GroveHost {
         title: e.title || e.url,
         url: e.url,
         favicon: e.favicon,
+        faviconData: t === undefined ? this.favicons?.get(e.url, e.favicon) : undefined,
         pinned: e.pinned,
         groupId: e.groupId,
         splitId: splitOf.get(e.id),

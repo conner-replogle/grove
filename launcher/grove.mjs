@@ -16,6 +16,11 @@
 //
 // sets up syncing with other devices (see sync-cli.mjs).
 //
+//   node launcher/grove.mjs mcp
+//
+// lets a local agent drive Grove, as an MCP server over stdio (mcp.mjs,
+// host/agents.ts).
+//
 //   GROVE_CHROME   the browser binary     (an installed bundle's own; else
 //                  the system chromium. Any Chromium 152+ with Webium works,
 //                  e.g. ungoogled-chromium. Not the Grove Chromium fork: its
@@ -39,11 +44,13 @@ import { GroveHost } from '../host/host.ts'
 import { SitePermissions } from '../host/site-permissions.ts'
 import { Store } from '../host/store.ts'
 import { Settings } from '../host/settings.ts'
+import { Favicons } from '../host/favicons.ts'
 import { SyncManager } from '../host/sync/manager.ts'
 import { Updater } from '../host/updates.ts'
 import { WorkersAiKeys } from '../host/workers-ai.ts'
 import { StoreExtensions } from '../host/extensions.ts'
 import { Widevine } from '../host/widevine.ts'
+import { AgentServer, agentSocket } from '../host/agents.ts'
 import { fetchDictionaries } from '../host/dictionaries.ts'
 import { UI_BINDING, UI_RECEIVER } from '../shared/protocol.ts'
 import { PipeCDP } from './cdp.mjs'
@@ -119,7 +126,14 @@ if (process.argv[2] === 'sync') {
   }
   process.exit(0)
 }
-if (runningPid()) {
+if (process.argv[2] === 'mcp') {
+  const { mcpShim } = await import('./mcp.mjs')
+  const bin = process.env.GROVE_RELAUNCH ?? join(home, '.local/bin/grove')
+  // A checkout starts its own launcher; an installed Grove, its start script.
+  const installed = existsSync(fileURLToPath(new URL('../.installed', import.meta.url)))
+  const start = installed && existsSync(bin) ? { cmd: bin, args: [] } : { cmd: process.execPath, args: [fileURLToPath(import.meta.url)] }
+  await mcpShim(PROFILE, start)
+} else if (runningPid()) {
   const handoff = spawn(CHROME, [`--user-data-dir=${PROFILE}`, ...passArgs], { stdio: 'ignore' })
   await new Promise((done) => handoff.on('exit', done))
   process.exit(0)
@@ -168,6 +182,7 @@ function prepareBridge() {
 // where you left off" (1), with nothing left to restore: any other setting
 // makes Chrome delete session cookies at launch, signing out of sites that
 // keep their login in one (Microsoft's, for one).
+let protectedPending = {}
 function prepareProfile() {
   const dir = join(PROFILE, 'Default')
   rmSync(join(dir, 'Sessions'), { recursive: true, force: true })
@@ -187,14 +202,30 @@ function prepareProfile() {
   } catch {
     mkdirSync(dir, { recursive: true })
   }
-  prefs.session = { ...prefs.session, restore_on_startup: 1 }
-  prefs.profile = { ...prefs.profile, exit_type: 'Normal', exited_cleanly: true }
   // Google searches what's typed in the URL bar until the user picks
   // another engine (Chrome then keeps their choice here). ungoogled-chromium
   // starts with none, and its own Google entry points at dead addresses.
-  if (!prefs.default_search_provider_data?.template_url_data) {
-    prefs.default_search_provider_data = { ...prefs.default_search_provider_data, template_url_data: GOOGLE_SEARCH() }
+  // (On Windows Chrome keeps these in Secure Preferences.)
+  let secure = {}
+  try {
+    secure = JSON.parse(readFileSync(join(dir, 'Secure Preferences'), 'utf8'))
+  } catch {}
+  const protectedPrefs = {}
+  if ((secure.session ?? prefs.session)?.restore_on_startup !== 1) protectedPrefs['session.restore_on_startup'] = 1
+  if (!(secure.default_search_provider_data ?? prefs.default_search_provider_data)?.template_url_data) {
+    protectedPrefs['default_search_provider_data.template_url_data'] = GOOGLE_SEARCH()
   }
+  // On macOS and Windows Chrome keeps a MAC of these two and resets them if
+  // anything else writes them: Chrome's own settings page sets them there,
+  // once Chrome runs (setProtectedPrefs).
+  if (mac || win) protectedPending = protectedPrefs
+  else {
+    prefs.session = { ...prefs.session, restore_on_startup: 1 }
+    if (protectedPrefs['default_search_provider_data.template_url_data']) {
+      prefs.default_search_provider_data = { ...prefs.default_search_provider_data, template_url_data: GOOGLE_SEARCH() }
+    }
+  }
+  prefs.profile = { ...prefs.profile, exit_type: 'Normal', exited_cleanly: true }
   // Spell check is on until the user turns it off, as in Chrome
   // (ungoogled-chromium starts with it off; host/dictionaries.ts fetches
   // the words).
@@ -307,6 +338,39 @@ await cdp
   .send('Extensions.loadUnpacked', { path: EXTENSION, enableInIncognito: true })
   .catch((e) => console.error('[grove] the bridge extension failed to load:', e.message))
 
+// Settings Chrome guards on macOS and Windows (see prepareProfile), set as
+// the user would: through chrome.settingsPrivate on Chrome's settings page,
+// open in a background tab the host never hears of (ownTabs), before the
+// host starts. Chrome then keeps them like any setting of the user's.
+const OWN_TAB_URL = 'chrome://settings/'
+// (The bridge holds its events until the host starts: count the tabs to
+// come rather than watch for them now.)
+const ownTabs = new Set()
+let ownTabsToCome = 0
+async function setProtectedPrefs() {
+  const prefs = Object.entries(protectedPending)
+  if (!prefs.length) return
+  ownTabsToCome++
+  const { targetId } = await cdp.send('Target.createTarget', { url: OWN_TAB_URL, background: true })
+  try {
+    const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true })
+    const evaluate = (expression) =>
+      cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId).then((r) => r.result?.value)
+    for (let i = 0; i < 100 && (await evaluate('typeof chrome.settingsPrivate?.setPref')) !== 'function'; i++) {
+      await new Promise((res) => setTimeout(res, 50))
+    }
+    for (const [name, value] of prefs) {
+      const ok = await evaluate(
+        `new Promise((done) => chrome.settingsPrivate.setPref(${JSON.stringify(name)}, ${JSON.stringify(value)}, '', done))`
+      )
+      if (!ok) console.error(`[grove] Chrome didn't take the setting ${name}`)
+    }
+  } finally {
+    await cdp.send('Target.closeTarget', { targetId }).catch(() => {})
+  }
+}
+const protectedPrefsSet = setProtectedPrefs().catch((e) => console.error('[grove] settings:', e.message))
+
 // The site permissions Grove keeps itself, applied before any page asks.
 const sitePermissions = new SitePermissions(join(PROFILE, 'grove-permissions.json'), (permission, setting, origin) =>
   cdp.send('Browser.setPermission', { permission, setting, origin })
@@ -361,6 +425,14 @@ function describeState(s) {
   )
 }
 
+// The element of a window's UI with DOM focus, inside shadow roots: a
+// page's <embed> when the page has the keyboard.
+const deepFocus = `() => {
+  let el = document.activeElement
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement
+  return el
+}`
+
 // The windows' UI, its open shadow roots included, without long data: URLs.
 const DOM_SNAPSHOT = `(() => {
   const roots = []
@@ -401,6 +473,38 @@ const host = new GroveHost(
       const expression = `window.${UI_RECEIVER}?.suggestions(${JSON.stringify(input)}, ${JSON.stringify(list)})`
       cdp.send('Runtime.evaluate', { expression }, sessionId).catch(() => {})
     },
+    async keyboard(windowId) {
+      const sessionId = sessionOfWindow(windowId)
+      if (!sessionId) return undefined
+      const r = await cdp.send('Runtime.evaluate', { expression: `(${deepFocus})()?.tagName`, returnByValue: true }, sessionId)
+      return r.result?.value === 'EMBED' ? 'page' : 'ui'
+    },
+    // The page: its <embed> focused again, which hands it the keyboard
+    // (Grove's own focus override aside). The UI: a click in the field it
+    // had focused, as claimKeyboard does, its selection kept.
+    async restoreKeyboard(windowId, holder) {
+      const sessionId = sessionOfWindow(windowId)
+      if (!sessionId) return
+      const expression = `(() => {
+        const el = (${deepFocus})()
+        if (${JSON.stringify(holder)} === 'page') {
+          if (el?.tagName !== 'EMBED') return null
+          el.blur()
+          HTMLElement.prototype.focus.call(el)
+          return null
+        }
+        if (!el || !('selectionStart' in el) || el.selectionStart === null) return null
+        const r = el.getBoundingClientRect()
+        window.__groveSelection = [el, el.selectionStart, el.selectionEnd, el.selectionDirection]
+        return { x: Math.round(r.right - 4), y: Math.round(r.top + r.height / 2) }
+      })()`
+      const r = await cdp.send('Runtime.evaluate', { expression, returnByValue: true }, sessionId)
+      const at = r.result?.value
+      if (!at) return
+      await this.click(windowId, at.x, at.y)
+      const back = 'const [el, s, e, d] = window.__groveSelection ?? []; delete window.__groveSelection; el?.setSelectionRange(s, e, d)'
+      await cdp.send('Runtime.evaluate', { expression: back }, sessionId)
+    },
     // A click from DevTools goes through Chrome's input handling like a real
     // one, which is what gives the window's UI the keyboard back from a page.
     async click(windowId, x, y) {
@@ -432,6 +536,7 @@ const sync = new SyncManager({
   log: (...a) => console.log('[grove]', ...a)
 })
 host.settings = settings
+host.favicons = new Favicons(join(PROFILE, 'grove-favicons.json'), () => host.refresh())
 host.sync = sync
 // Organize's Workers AI key, given in the settings.
 host.workersAi = new WorkersAiKeys(PROFILE, () => host.refresh())
@@ -610,8 +715,11 @@ async function attachBridge(sessionId, waiting) {
   log('bridge connected')
   if (!hostAttached) {
     hostAttached = true
+    await protectedPrefsSet
     await host.attach(bridge)
     sync.start().catch((e) => console.log('[grove] sync:', e.message))
+    // Local agents (grove mcp), once there are windows for their tabs.
+    new AgentServer({ cdp, host, bridge, version: updater.current, log: (...a) => console.log('[grove]', ...a) }).listen(agentSocket(PROFILE))
   }
   await bridge.call('ready')
 }
@@ -668,6 +776,13 @@ cdp.on('Target.detachedFromTarget', ({ sessionId, targetId }) => {
 cdp.on('Runtime.bindingCalled', ({ name, payload }, sessionId) => {
   if (name === 'groveEmit' && sessionId === bridgeSession) {
     const event = JSON.parse(payload)
+    // Grove's own settings tab stays out of the workspaces.
+    const tabId = event.tab?.id ?? event.tabId
+    if (event.type === 'tabCreated' && ownTabsToCome && event.tab.url.startsWith(OWN_TAB_URL)) {
+      ownTabsToCome--
+      ownTabs.add(tabId)
+    }
+    if (ownTabs.has(tabId)) return
     debug.record('bridge', `event ${JSON.stringify(redact(event))}`)
     host.onBridgeEvent(event)
   } else if (name === UI_BINDING && uiSessions.has(sessionId)) {

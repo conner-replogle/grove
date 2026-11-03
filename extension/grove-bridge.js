@@ -72,7 +72,13 @@ async function emitCreated(tab) {
   restoredRequests.delete(tab.id)
   if (!requestId && q && q.length) requestId = q.shift()
   const session = requestId || !unloaded.size ? undefined : await restoredSession(tab)
-  emit({ type: 'tabCreated', tab: tabInfo(tab), requestId, restoredSession: session })
+  // Its DevTools target, whose opener the host looks up: a page an agent's
+  // page (host/agents.ts) opened is the agent's. (Chrome gives a page a link
+  // in a background tab opened the window's active tab as its opener.)
+  const targetId = requestId
+    ? undefined
+    : (await chrome.debugger.getTargets().catch(() => [])).find((t) => t.tabId === tab.id)?.id
+  emit({ type: 'tabCreated', tab: tabInfo(tab), requestId, restoredSession: session, targetId })
 }
 
 chrome.tabs.onCreated.addListener((tab) => {
@@ -416,6 +422,12 @@ globalThis.grove = {
     } catch {
       return null
     }
+  },
+  // The DevTools target of a tab's page, which agents drive
+  // (host/agents.ts). Listing targets attaches to none of them.
+  async targetOf(tabId) {
+    const targets = await chrome.debugger.getTargets()
+    return targets.find((t) => t.tabId === tabId && t.type === 'page')?.id ?? null
   },
   // A tab as Chrome has it now, or null once it's gone.
   async get(tabId) {

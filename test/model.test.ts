@@ -4,6 +4,7 @@ import {
   addEntry,
   closeEntries,
   closeEntry,
+  createAgentWorkspace,
   createBlankWorkspace,
   createGroup,
   createWorkspace,
@@ -145,6 +146,21 @@ describe('workspaces', () => {
   it('withWorkspace normalizes and rejects unknown ids', () => {
     const m = emptyModel()
     expect(() => withWorkspace(m, 'nope', (w) => w)).toThrow()
+  })
+})
+
+describe('the Agents workspace', () => {
+  it('is among the workspaces but never saved or synced', () => {
+    let m = emptyModel()
+    const home = m.workspaces[0].id
+    let blank: string, agents: string
+    ;[m, blank] = createBlankWorkspace(m)
+    ;[m, agents] = createAgentWorkspace(m)
+    expect(m.workspaces.map((w) => w.id)).toEqual([home, agents, blank])
+    expect(realWorkspaces(m).map((w) => w.id)).toEqual([home, agents])
+    // Left on it, the saved model goes back to one of the user's.
+    m = { ...m, lastActiveWorkspaceId: agents }
+    expect(withoutBlank(m)).toMatchObject({ workspaces: [{ id: home }], lastActiveWorkspaceId: home })
   })
 })
 

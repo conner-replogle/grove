@@ -33,9 +33,23 @@ export function createBlankWorkspace(model: Model, isPrivate = false): [Model, s
 // The user's workspaces: all but blank windows'.
 export const realWorkspaces = (model: Model): Workspace[] => model.workspaces.filter((w) => !w.blank)
 
-// The model as it's saved and synced: without blank windows' workspaces.
+// Agents' tabs (host/agents.ts): its own workspace, made when an agent
+// first opens a page.
+export const AGENT_COLOR = '#0d9488'
+export function createAgentWorkspace(model: Model): [Model, string] {
+  const ws: Workspace = { ...newWorkspace('Agents', AGENT_COLOR), icon: 'bot', agent: true }
+  return [{ ...model, workspaces: [...realWorkspaces(model), ws, ...model.workspaces.filter((w) => w.blank)] }, ws.id]
+}
+
+// The model as it's saved and synced: without blank windows' workspaces,
+// or the agents'.
 export function withoutBlank(model: Model): Model {
-  return model.workspaces.some((w) => w.blank) ? { ...model, workspaces: realWorkspaces(model) } : model
+  if (!model.workspaces.some((w) => w.blank || w.agent)) return model
+  const workspaces = model.workspaces.filter((w) => !w.blank && !w.agent)
+  const lastActiveWorkspaceId = workspaces.some((w) => w.id === model.lastActiveWorkspaceId)
+    ? model.lastActiveWorkspaceId
+    : workspaces[0].id
+  return { ...model, workspaces, lastActiveWorkspaceId }
 }
 
 export function getWorkspace(model: Model, id: string): Workspace {

@@ -55,7 +55,8 @@ export GROVE_CHROME="${GROVE_CHROME:-$bundle/chromium/chrome}"
 export GROVE_BUNDLE="$bundle"
 export GROVE_RELAUNCH="$self"
 
-if [ "${1:-}" = sync ]; then exec "$node" "$data/app/launcher/grove.mjs" "$@"; fi
+# sync and mcp talk on stdio.
+case "${1:-}" in sync | mcp) exec "$node" "$data/app/launcher/grove.mjs" "$@" ;; esac
 log="${XDG_CACHE_HOME:-$HOME/.cache}/grove/grove.log"
 mkdir -p "$(dirname "$log")"
 exec "$node" "$data/app/launcher/grove.mjs" "$@" >>"$log" 2>&1

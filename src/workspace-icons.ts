@@ -24,6 +24,7 @@ import dumbbell from 'lucide-static/icons/dumbbell.svg'
 import flaskConical from 'lucide-static/icons/flask-conical.svg'
 import globe from 'lucide-static/icons/globe.svg'
 import sun from 'lucide-static/icons/sun.svg'
+import bot from 'lucide-static/icons/bot.svg'
 
 export const WORKSPACE_ICONS: Record<string, string> = {
   'leaf': leaf,
@@ -49,5 +50,6 @@ export const WORKSPACE_ICONS: Record<string, string> = {
   'dumbbell': dumbbell,
   'flask-conical': flaskConical,
   'globe': globe,
-  'sun': sun
+  'sun': sun,
+  'bot': bot
 }

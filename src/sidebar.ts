@@ -32,10 +32,12 @@ import { COLOR_HEX, colorHex, workspaceEditor, workspaceIcon } from './workspace
 import folderSvg from './zen/folder-icon.svg'
 import zenTokens from './zen/tokens.css'
 
-// Chrome's favicon cache, by the page's own icon URL when the tab has
+// The icon Grove fetched for a tab that isn't open, else Chrome's favicon
+// cache, by the page's own icon URL when the tab has
 // reported one (a page looked up by its URL is only found once history has
 // stored it), else by the page URL.
 const faviconFor = (e: EntryView): string =>
+  e.faviconData ??
   `chrome://favicon2/?size=16&scaleFactor=1x&allowGoogleServerFallback=0&${
     e.favicon && /^https?:/.test(e.favicon) ? `iconUrl=${encodeURIComponent(e.favicon)}` : `pageUrl=${encodeURIComponent(e.url)}`
   }`
@@ -54,6 +56,10 @@ class GroveSidebar extends HTMLElement {
   // A render that arrived while a drag was under way (it would pull the
   // dragged row out from under the pointer).
   private renderQueued = false
+  // The folder being renamed: its field is kept across renders, as each
+  // render rebuilds the list.
+  private renaming?: { groupId: string; input: HTMLInputElement }
+  private rendering = false
   private readonly seenDownloads: Seen = { ids: new Set(), primed: false }
 
   connectedCallback(): void {
@@ -139,8 +145,14 @@ class GroveSidebar extends HTMLElement {
 
     scroll.append(...this.items(tabs, s, 'tabs'))
 
+    const field = this.renaming?.input
+    const typing = !!field && this.root.activeElement === field
+    this.rendering = true
     this.body.replaceChildren(...[scroll, updateNotice(s.update), this.foot(s)].filter((n): n is HTMLElement => !!n))
+    this.rendering = false
     scroll.scrollTop = scrollTop
+    if (field && !field.isConnected) this.renaming = undefined
+    else if (typing) field?.focus()
   }
 
   private indicator(s: WindowState): HTMLElement {
@@ -338,7 +350,12 @@ class GroveSidebar extends HTMLElement {
     box.style.setProperty('--folder-accent', COLOR_HEX[group.color])
     box.dataset.section = section
     const head = el('div', 'folder-header')
-    head.append(iconEl('folder-icon', folderSvg), el('span', 'label', group.title || 'Folder'))
+    const label = this.renaming?.groupId === group.id ? this.renaming.input : el('span', 'label', group.title || 'Folder')
+    label.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation()
+      this.renameFolder(group)
+    })
+    head.append(iconEl('folder-icon', folderSvg), label)
     head.dataset.kind = 'folder'
     head.dataset.group = group.id
     head.dataset.section = section
@@ -351,6 +368,7 @@ class GroveSidebar extends HTMLElement {
           group.pinned ? 'Unpin from workspace' : 'Pin to workspace',
           () => send({ type: 'setFolderPinned', groupId: group.id, pinned: !group.pinned })
         ],
+        ['Rename folder', () => this.renameFolder(group)],
         'separator',
         ['Ungroup', () => send({ type: 'ungroup', groupId: group.id })],
         [`Delete folder and ${tabCount(members.length)}`, () => send({ type: 'deleteFolder', groupId: group.id })]
@@ -368,6 +386,36 @@ class GroveSidebar extends HTMLElement {
       box.append(children)
     }
     return box
+  }
+
+  // Swaps the folder's name for a field: Enter or leaving it saves, Escape
+  // cancels.
+  private renameFolder(group: Group): void {
+    if (this.renaming?.groupId === group.id) return
+    const input = el('input', 'rename')
+    input.value = group.title
+    input.spellcheck = false
+    const finish = (save: boolean): void => {
+      if (this.renaming?.input !== input) return
+      this.renaming = undefined
+      const title = input.value.trim()
+      if (save && title && title !== group.title) send({ type: 'renameFolder', groupId: group.id, title })
+      this.render()
+    }
+    input.addEventListener('keydown', (ev) => {
+      ev.stopPropagation()
+      if (ev.key === 'Enter') finish(true)
+      else if (ev.key === 'Escape') finish(false)
+    })
+    input.addEventListener('blur', () => {
+      if (!this.rendering) finish(true)
+    })
+    // Clicks in the field mustn't fold the folder or start a drag.
+    for (const type of ['pointerdown', 'mousedown', 'click', 'dblclick']) input.addEventListener(type, (ev) => ev.stopPropagation())
+    this.renaming = { groupId: group.id, input }
+    this.render()
+    input.focus()
+    input.select()
   }
 
   // Deletes the folder with its tabs. The first click only arms it (the

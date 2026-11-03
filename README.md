@@ -143,3 +143,21 @@ Workers AI account ID and API token in the settings. The token stays on
 the device (`<profile>/grove-workers-ai.json`). Organize is NOT end-to-end
 encrypted: the titles and addresses (without queries) of the tabs it sorts
 go to Cloudflare.
+
+## Agents
+
+Local agents (Claude Code and the like) can drive Grove in tabs of their
+own, over MCP:
+
+    claude mcp add --scope user grove -- grove mcp
+
+`grove mcp` (`launcher/mcp.mjs`) joins the agent's stdio to a socket only
+this user can open (in `$XDG_RUNTIME_DIR`), starting Grove if it isn't
+running; `host/agents.ts` serves the tools (open_tab, snapshot, click,
+type, press, screenshot, ...). An agent's tabs live in the Agents
+workspace, with the user's own logins, in the background of a window:
+switch a window to the workspace to watch. An agent only sees its own tabs
+and the pages they open. Its input goes to its pages over DevTools; Chrome
+hands a pressed page the window's keyboard, so the host gives it straight
+back to the user's page or the URL bar. The workspace is never saved or
+synced; the tabs stay open when the agent leaves, until cleared.
