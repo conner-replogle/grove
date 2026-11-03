@@ -155,6 +155,8 @@ const KINDS = new Set([
 ])
 // Site settings the site panel shows once a site has its own (and lets the
 // person flip between allow and block).
+// Chrome's zoom levels (zoom::kPresetZoomFactors).
+const ZOOM_LEVELS = [0.25, 1 / 3, 0.5, 2 / 3, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]
 const SITE_SETTINGS = ['notifications', 'location', 'camera', 'microphone', 'clipboard', 'popups', 'sound', 'javascript', 'images']
 const permissionRequests = new Map()
 let nextPermission = 1
@@ -346,6 +348,10 @@ globalThis.grove = {
       groveWindows.splice(groveWindows.indexOf(asked) >>> 0, 1)
       throw e
     }
+  },
+  // A window as the user's Ctrl+N opens (not one of Grove's own).
+  async userWindow() {
+    await chrome.windows.create({ type: 'normal', focused: true })
   },
   async closeWindow(windowId) {
     await chrome.windows.remove(windowId)
@@ -569,7 +575,8 @@ globalThis.grove = {
         .executeScript({ target: { tabId }, func: () => !!document.getElementById('grove-reader') })
         .then(([r]) => r?.result === true)
         .catch(() => false))
-    return { settings, bookmarked: marks.length > 0, reader }
+    const zoom = tabId === undefined ? 1 : await chrome.tabs.getZoom(tabId).catch(() => 1)
+    return { settings, bookmarked: marks.length > 0, reader, zoom }
   },
   async setSiteSetting({ origin, name, setting, incognito = false }) {
     if (!SITE_SETTINGS.includes(name)) return
@@ -600,6 +607,20 @@ globalThis.grove = {
   async reader(tabId) {
     const [result] = await chrome.scripting.executeScript({ target: { tabId }, files: ['readability.js', 'reader.js'] })
     return result?.result ?? null
+  },
+  // Zooms the page to Chrome's next zoom level in or out (step 1 or -1),
+  // or back to 100% (0).
+  async zoom({ tabId, step }) {
+    const now = await chrome.tabs.getZoom(tabId)
+    const next =
+      step === 0 ? 1
+      : step > 0 ? (ZOOM_LEVELS.find((z) => z > now + 0.001) ?? ZOOM_LEVELS.at(-1))
+      : (ZOOM_LEVELS.findLast((z) => z < now - 0.001) ?? ZOOM_LEVELS[0])
+    await chrome.tabs.setZoom(tabId, next)
+  },
+  // Opens Chrome's print preview for the page.
+  async print(tabId) {
+    await chrome.scripting.executeScript({ target: { tabId }, func: () => void setTimeout(() => print()) })
   },
   // What the window shows, as a PNG in Downloads (where the downloads
   // panel shows it).

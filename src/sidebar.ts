@@ -16,7 +16,6 @@ import type { EntryView, WindowState, WorkspaceSummary } from '../shared/protoco
 import { COLORS, MAX_SPLIT, type Group, type SplitLayout } from '../shared/types.ts'
 import folderInputSvg from 'lucide-static/icons/folder-input.svg'
 import privateSvg from 'lucide-static/icons/venetian-mask.svg'
-import settingsSvg from 'lucide-static/icons/settings.svg'
 import { Dragger } from './drag'
 import { debugButton } from './debug'
 import { downloadsButton, type Seen } from './downloads'
@@ -24,7 +23,6 @@ import { send, subscribe } from './host-client'
 import { icons } from './icons'
 import sidebarCss from './styles/sidebar.css'
 import { svg } from './svg'
-import { openSettings } from './settings'
 import { openNewTabSearch } from './urlbar'
 import { updateNotice } from './update-notice'
 import { applyWorkspaceTheme } from './theme'
@@ -471,14 +469,10 @@ class GroveSidebar extends HTMLElement {
     add.title = 'New workspace'
     add.append(svg(icons.plus))
     add.addEventListener('click', () => this.openEditor(undefined))
-    // Bottom left, as in Zen: downloads, and Grove's settings (and in Debug
-    // mode, the bug button).
+    // Bottom left, as in Zen: downloads (and in Debug mode, the bug
+    // button). Settings are in the app menu (app-menu.ts).
     const left = el('div', 'foot-left')
-    const settings = el('button', 'tbtn')
-    settings.title = 'Settings'
-    settings.append(svg(settingsSvg))
-    settings.addEventListener('click', openSettings)
-    left.append(downloadsButton(s, this.seenDownloads), settings)
+    left.append(downloadsButton(s, this.seenDownloads))
     const bug = debugButton(s)
     if (bug) left.append(bug)
     // A blank window has no workspaces of its own to switch between.

@@ -7,6 +7,7 @@ import zenTokens from './zen/tokens.css'
 import searchboxCss from './styles/searchbox.css'
 import urlbarResultsCss from './zen/urlbar-results.css'
 import { addStyles, patchMethod } from './patch'
+import { showAppMenu } from './app-menu'
 import { showDomainOnly } from './address'
 import { compactMode, sidebarToggle } from './compact'
 import { recordDebugInput } from './debug'
@@ -88,6 +89,7 @@ function keepSidebarMounted(): void {
   let resizer: HTMLElement | undefined
   let edge: HTMLElement | undefined
   let toggle: HTMLElement | undefined
+  let appMenu: HTMLElement | undefined
   const anchored = new WeakSet<Element>()
   // On macOS with the sidebar hidden, a strip above the page for the
   // window's buttons, which stay at the top left (app.css).
@@ -108,6 +110,8 @@ function keepSidebarMounted(): void {
     const topRow = root.querySelector('#searchBar')
     toggle ??= sidebarToggle()
     if (topRow && toggle.parentNode !== topRow) topRow.prepend(toggle)
+    appMenu ??= showAppMenu()
+    if (topRow && appMenu.parentNode !== topRow) topRow.append(appMenu)
     // The extensions button lives inside the URL bar, as in Zen.
     const box = root.querySelector<HTMLElement>('#addressBox')
     if (box && !anchored.has(box)) {

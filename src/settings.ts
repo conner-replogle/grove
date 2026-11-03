@@ -1,5 +1,5 @@
-// Grove's settings: a card over the page, opened from the gear at the
-// bottom of the sidebar. Sync (its state, what it syncs, the sync code
+// Grove's settings: a card over the page, opened from the app menu
+// (app-menu.ts). Sync (its state, what it syncs, the sync code
 // that joins another device, joining or starting one with an invite,
 // turning it off), Organize (its Workers AI key), general settings, and
 // About: the versions and Grove's updates.

@@ -732,6 +732,8 @@ export class GroveHost {
         this.update((m) => ([m, id] = M.createWorkspace(m, c.name, c.color, c.icon))[0])
         return this.blankOf(windowId) ? this.moveWindowTo(windowId, id) : this.switchWorkspace(windowId, id)
       }
+      case 'newWindow':
+        return void (await this.bridge?.call('userWindow').catch((e: unknown) => this.log('new window', e)))
       case 'newBlankWindow':
         return void (await this.bridge?.call('newWindow', { url: NEW_TAB_URL }).catch((e: unknown) => this.log('new window', e)))
       case 'newPrivateWindow':
@@ -809,6 +811,8 @@ export class GroveHost {
       case 'screenshot':
       case 'reader':
       case 'clearSiteData':
+      case 'zoom':
+      case 'print':
         return this.sitePanel(windowId, b, c)
     }
   }
@@ -993,14 +997,20 @@ export class GroveHost {
           if (this.incognito.has(windowId)) break
           await this.bridge.call('clearSiteData', { origin, tabId })
           break
+        case 'zoom':
+          if (tabId !== undefined) await this.bridge.call('zoom', { tabId, step: c.step })
+          break
+        case 'print':
+          if (tabId !== undefined) await this.bridge.call('print', tabId)
+          break
       }
     } catch (e) {
       notice = (e as Error).message
       this.log('site panel', c.type, notice)
     }
     const info = await this.bridge
-      .call<{ settings: SiteInfo['settings']; bookmarked: boolean; reader: boolean }>('siteInfo', { origin, url, tabId, incognito: this.incognito.has(windowId) })
-      .catch(() => ({ settings: [], bookmarked: false, reader: false }))
+      .call<{ settings: SiteInfo['settings']; bookmarked: boolean; reader: boolean; zoom: number }>('siteInfo', { origin, url, tabId, incognito: this.incognito.has(windowId) })
+      .catch(() => ({ settings: [], bookmarked: false, reader: false, zoom: 1 }))
     this.siteInfos.set(windowId, {
       url,
       origin,
@@ -1010,6 +1020,7 @@ export class GroveHost {
       kept: this.incognito.has(windowId) ? [] : (this.sitePermissions?.forOrigin(origin) ?? []),
       bookmarked: info.bookmarked,
       reader: info.reader,
+      zoom: info.zoom,
       notice
     })
     this.push(windowId)

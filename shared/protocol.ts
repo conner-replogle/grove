@@ -149,6 +149,8 @@ export interface SiteInfo {
   kept: { kind: PermissionKind; setting: 'granted' | 'denied' }[]
   bookmarked: boolean
   reader: boolean
+  // The page's zoom (1: 100%).
+  zoom: number
   // Something the last action couldn't do.
   notice?: string
 }
@@ -291,6 +293,8 @@ export type HostCommand =
   // Zen's blank windows: open one; move a tab into a new one (dragged off
   // the window and dropped at screen point x, y, or from its menu); or send
   // a blank window's tabs to a workspace, in a window showing it.
+  // A window as Ctrl+N opens: showing a workspace.
+  | { type: 'newWindow' }
   | { type: 'newBlankWindow' }
   | { type: 'newPrivateWindow' }
   | { type: 'tearOff'; entryId: string; x?: number; y?: number }
@@ -350,6 +354,10 @@ export type HostCommand =
   | { type: 'screenshot' }
   | { type: 'reader' }
   | { type: 'clearSiteData' }
+  // The app menu's: zoom the page a step in or out (0: back to 100%), and
+  // print it.
+  | { type: 'zoom'; step: -1 | 0 | 1 }
+  | { type: 'print' }
 
 // A history suggestion for the URL bar (host/history-index.ts).
 export interface HistorySuggestion {
