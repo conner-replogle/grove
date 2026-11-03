@@ -22,7 +22,7 @@ import { showSplitView } from './split'
 import { showStoreOffers } from './webstore'
 import { showTranslateButton } from './translate'
 import { suggestFromHistory } from './suggestions'
-import { openUrlBarOnNewTab, releasePageFocus, watchUrlBarPlace } from './urlbar'
+import { closeAfterEnter, closeUrlBar, openUrlBarOnNewTab, watchUrlBarPlace } from './urlbar'
 import './sidebar'
 
 declare global {
@@ -145,19 +145,14 @@ function keepSidebarMounted(): void {
 function closeUrlBarAfterUse(): void {
   const inUrlBar = (e: Event): boolean =>
     e.composedPath().some((n) => n instanceof Element && n.tagName === 'WEBUI-BROWSER-SEARCHBOX')
-  const close = (): void => {
-    let el: Element | null = document.activeElement
-    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement
-    if (el instanceof HTMLElement) el.blur()
-    releasePageFocus()
-  }
   document.addEventListener('keydown', (e) => {
     if (!inUrlBar(e) || e.isComposing) return
-    if (e.key === 'Enter' || e.key === 'Escape') setTimeout(close, 0)
+    if (e.key === 'Escape') setTimeout(closeUrlBar, 0)
+    else if (e.key === 'Enter') closeAfterEnter()
   })
   document.addEventListener('click', (e) => {
     if (inUrlBar(e) && e.composedPath().some((n) => n instanceof Element && n.tagName === 'CR-SEARCHBOX-MATCH')) {
-      setTimeout(close, 0)
+      setTimeout(closeUrlBar, 0)
     }
   })
 }

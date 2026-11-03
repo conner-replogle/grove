@@ -123,8 +123,6 @@ export function openUrlBarOnNewTab(): void {
   )
   onFocusUrlBar(openForNewTab)
   onOpenNewTabSearch(() => openNewTabSearch())
-  openInNewTabWhileSearching()
-  enterWaitsForResults()
   document.addEventListener(
     'keydown',
     (e) => {
@@ -188,6 +186,33 @@ function showsNewTabPage(embed: HTMLEmbedElement): boolean {
     if (data?.id === view.tabId) return /^chrome:\/\/(newtab|new-tab-page)\/?$/.test(data.url)
   }
   return false
+}
+
+// The searchbox opened what the user picked (suggestions.ts sees it go to
+// the browser): a new tab's search has done its job, and the bar closes.
+export function matchOpened(): void {
+  endNewTabSearch(true)
+  setTimeout(closeUrlBar, 0)
+}
+
+// Enter was pressed in the URL bar. The bar closes once what it picked
+// opens (matchOpened): the searchbox may hold the Enter until its results
+// are in, and closing first would reset the field. Should nothing open,
+// it closes after a while.
+let enterFallback: ReturnType<typeof setTimeout> | undefined
+export function closeAfterEnter(): void {
+  clearTimeout(enterFallback)
+  enterFallback = setTimeout(closeUrlBar, 3000)
+}
+
+// Closes the URL bar: its field loses focus, and the page gets the keyboard
+// back if the bar was holding it.
+export function closeUrlBar(): void {
+  clearTimeout(enterFallback)
+  let el: Element | null = document.activeElement
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement
+  if (el instanceof HTMLElement) el.blur()
+  releasePageFocus()
 }
 
 // The URL bar is done (Enter, Escape, a suggestion, a click elsewhere):
@@ -359,95 +384,3 @@ function selectAllOnClick(box: HTMLElement): void {
   )
 }
 
-// Chrome's modifier for a new tab: Cmd on a Mac, Ctrl elsewhere. With Shift
-// it opens a new foreground tab; Shift alone opens a new window.
-const mac = navigator.platform.startsWith('Mac')
-const newTabKey = (e: KeyboardEvent | MouseEvent): boolean => (mac ? e.metaKey : e.ctrlKey) && e.shiftKey
-
-// While a new tab's search is open, a click on a suggestion opens it in a
-// new foreground tab: Chrome's disposition for Ctrl+Shift (Cmd+Shift on a
-// Mac), which Webium's searchbox reads off the event and passes to the
-// browser. (Enter does the same in enterWaitsForResults.)
-function openInNewTabWhileSearching(): void {
-  const redirect = (e: KeyboardEvent | MouseEvent, make: (init: KeyboardEventInit & MouseEventInit) => Event): void => {
-    if (!searchingForNewTab || !inSearchbox(e) || newTabKey(e)) return
-    e.preventDefault()
-    e.stopImmediatePropagation()
-    endNewTabSearch(true)
-    const init = { bubbles: true, composed: true, cancelable: true, ctrlKey: !mac, metaKey: mac, shiftKey: true }
-    e.composedPath()[0]?.dispatchEvent(make(init))
-  }
-  document.addEventListener(
-    'click',
-    (e) => {
-      if (e.button !== 0) return
-      if (!e.composedPath().some((n) => n instanceof Element && n.tagName === 'CR-SEARCHBOX-MATCH')) return
-      redirect(e, (init) => new MouseEvent('click', { ...init, button: 0, clientX: e.clientX, clientY: e.clientY }))
-    },
-    true
-  )
-}
-
-// Enter opens what the URL bar's first row is once the results for the
-// text are in. Webium's searchbox ignores an Enter while it has no results,
-// and one it holds for results on their way is lost if the field closes
-// first (which Grove does right after Enter); and Grove's own suggestions
-// (suggestions.ts) may change the first row. So Grove holds the Enter until
-// the results for the field's text are in, then sends it on, as
-// Ctrl+Shift+Enter (Cmd+Shift+Enter on a Mac: a new foreground tab) for a
-// new tab's search.
-function enterWaitsForResults(): void {
-  const forwarded = new WeakSet<Event>()
-  document.addEventListener(
-    'keydown',
-    (e) => {
-      if (e.key !== 'Enter' || e.isComposing || forwarded.has(e) || !inSearchbox(e)) return
-      const target = e.composedPath()[0]
-      const box = searchbox()
-      if (!(target instanceof HTMLElement) || !box) return
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      const newTab = searchingForNewTab && !newTabKey(e)
-      void resultsReady(box).then(() => {
-        if (newTab) endNewTabSearch(true)
-        const enter = new KeyboardEvent('keydown', {
-          key: 'Enter',
-          code: e.code,
-          bubbles: true,
-          composed: true,
-          cancelable: true,
-          ctrlKey: e.ctrlKey || (newTab && !mac),
-          shiftKey: e.shiftKey || newTab,
-          altKey: e.altKey,
-          metaKey: e.metaKey || (newTab && mac)
-        })
-        forwarded.add(enter)
-        target.dispatchEvent(enter)
-      })
-    },
-    true
-  )
-}
-
-// Something else Enter waits for: Grove's own suggestions (suggestions.ts),
-// one of which may be what Enter should open.
-let alsoReady = (): boolean => true
-export function enterAlsoWaitsFor(ready: () => boolean): void {
-  alsoReady = ready
-}
-
-// Resolves once the searchbox has results for its current query (as its
-// own Enter handling wants them), or after a while regardless.
-function resultsReady(box: Searchbox, timeout = 1500): Promise<void> {
-  const ready = (): boolean =>
-    !box.getInputElement().inputElement.value.trim() ||
-    (!!box.result?.matches.length && (box.activeQueryId === -1 || box.result.queryId === box.activeQueryId) && alsoReady())
-  return new Promise((resolve) => {
-    const start = performance.now()
-    const check = (): void => {
-      if (ready() || performance.now() - start > timeout) resolve()
-      else setTimeout(check, 16)
-    }
-    check()
-  })
-}

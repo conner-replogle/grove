@@ -6,12 +6,17 @@
 // site the input starts, filled in as the user types) first, and pages from
 // history ahead of the search suggestions. Opening and removing matches
 // goes to the browser by the match's position in Chrome's result, so the
-// searchbox's page handler is wrapped to translate positions, and to open
-// or forget Grove's own matches through the host.
+// searchbox's page handler is wrapped to translate positions, to open or
+// forget Grove's own matches through the host, and to open a new tab's
+// search in a new tab.
+//
+// An Enter pressed before the results for what was typed are in waits for
+// them, as the searchbox itself makes it wait for Chrome's: the same Enter
+// also waits for Grove's, which may change the first row.
 import type { HistorySuggestion } from '../shared/protocol.ts'
 import { onSuggestions, send } from './host-client'
 import { patchMethod } from './patch'
-import { enterAlsoWaitsFor, isNewTabSearch, searchbox } from './urlbar'
+import { isNewTabSearch, matchOpened, searchbox } from './urlbar'
 
 // A match as Webium's searchbox reads it (searchbox.mojom AutocompleteMatch).
 type Match = Record<string, unknown> & { destinationUrl: string; allowedToBeDefaultMatch?: boolean; type?: string }
@@ -24,6 +29,8 @@ interface Result {
 type Handler = Record<string, (...a: unknown[]) => unknown>
 interface Box extends HTMLElement {
   result: Result | null
+  // An Enter the searchbox holds until its results are in (Chromium 155).
+  lastIgnoredEnterEvent_?: KeyboardEvent | null
   lastQueriedInput: string | null
   activeQueryId: number
   selectedMatchIndex: number
@@ -38,8 +45,22 @@ type Source = { chrome: number } | { grove: HistorySuggestion }
 const MAX_MATCHES = 10
 const wired = new WeakSet<Element>()
 
+// The searchbox's page handler as Grove wraps it (translate), once wired.
+let wrapHandler: ((handler: Handler) => Handler) | undefined
+const wrapped = new WeakSet<object>()
+
 export function suggestFromHistory(): void {
   suggestWhenEmptied()
+  // The rows open and remove their matches with a handler of their own
+  // (the same browser handler, not the searchbox's pageHandler()): it goes
+  // through Grove's wrapper too.
+  patchMethod<[], void, Element & { pageHandler_?: Handler }>('cr-searchbox-match', 'connectedCallback', function (original) {
+    original()
+    if (this.pageHandler_ && wrapHandler && !wrapped.has(this.pageHandler_)) {
+      this.pageHandler_ = wrapHandler(this.pageHandler_)
+      wrapped.add(this.pageHandler_)
+    }
+  })
   let latest: { input: string; list: HistorySuggestion[] } | undefined
   let box: Box | undefined
   let chromeResult: Result | null = null
@@ -52,7 +73,26 @@ export function suggestFromHistory(): void {
   // Grove's suggestions arriving after it would fill in again what a
   // Backspace just deleted.
   const fillable = new Map<number, boolean>()
-  enterAlsoWaitsFor(() => asked === undefined || latest?.input === asked)
+  // Grove's suggestions for the text are in.
+  const groveReady = (): boolean => asked === undefined || latest?.input === asked
+  // An Enter waiting for Grove's suggestions, and how long it may.
+  let heldEnter: KeyboardEvent | undefined
+  let heldTimer: ReturnType<typeof setTimeout> | undefined
+  const hold = (e: KeyboardEvent): void => {
+    heldEnter = e
+    clearTimeout(heldTimer)
+    heldTimer = setTimeout(release, 1500)
+  }
+  // Hands the Enter back to the searchbox's own wait, and lets the
+  // searchbox take the results (Grove's in them by now, or not coming) as
+  // new: it then opens the first row for that Enter.
+  const release = (): void => {
+    clearTimeout(heldTimer)
+    if (!heldEnter || !box || !chromeResult) return
+    box.lastIgnoredEnterEvent_ = heldEnter
+    heldEnter = undefined
+    box.onAutocompleteResultChanged(chromeResult)
+  }
 
   const wire = (): void => {
     const el = searchbox() as unknown as Box | null
@@ -76,14 +116,36 @@ export function suggestFromHistory(): void {
         const [merged, from] = merge(value, latest, value ? fillable.get(value.queryId) : undefined, el)
         sources = from
         set.call(this, merged)
+        // Chrome's results came with an Enter waiting for them; it waits on
+        // for Grove's. (The searchbox looks for it right after this.)
+        if (el.lastIgnoredEnterEvent_ && !groveReady()) {
+          hold(el.lastIgnoredEnterEvent_)
+          el.lastIgnoredEnterEvent_ = null
+        }
       }
     })
+    // An Enter with Chrome's results in but not yet Grove's, on the first
+    // row: it waits, unseen by the searchbox. (Without the searchbox's own
+    // wait, in Chromium before 155, Enter goes through as it is.)
+    el.addEventListener(
+      'keydown',
+      (e) => {
+        if (e.key !== 'Enter' || e.isComposing || groveReady() || !('lastIgnoredEnterEvent_' in el)) return
+        const chromeReady = el.activeQueryId === -1 || el.result?.queryId === el.activeQueryId
+        if (!chromeReady || el.selectedMatchIndex > 0) return
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        hold(e)
+      },
+      true
+    )
     const own = el.pageHandler.bind(el)
-    el.pageHandler = () =>
-      translate(own(), () => sources, forget, (queryId, preventInline) => {
+    wrapHandler = (handler) =>
+      translate(handler, () => sources, forget, (queryId, preventInline) => {
         fillable.set(queryId, !preventInline)
         for (const id of fillable.keys()) if (id < queryId - 20) fillable.delete(id)
       })
+    el.pageHandler = () => wrapHandler!(own())
     el.addEventListener('query-autocomplete', (e) => {
       // An empty box too: the host answers with the most frecent pages.
       const input = (e as CustomEvent<{ inputValue: string }>).detail?.inputValue ?? ''
@@ -103,6 +165,7 @@ export function suggestFromHistory(): void {
     wire()
     latest = { input, list }
     if (!box || !chromeResult || chromeResult.input !== input || chromeResult.queryId !== box.activeQueryId) return
+    if (heldEnter) return release()
     // Chrome's results for this text came first: show them again with
     // Grove's, and let the searchbox pick the default (and fill it in) as
     // it does for a new result, unless the user has moved off the first row.
@@ -226,6 +289,11 @@ function toMatch(s: HistorySuggestion, typed: string, bare: string, fill: boolea
   }
 }
 
+// Chrome's modifiers for a new foreground tab: Cmd+Shift on a Mac,
+// Ctrl+Shift elsewhere (on a Mac, Ctrl+Shift reads as Shift: a new window).
+const mac = navigator.platform.startsWith('Mac')
+const NEW_TAB_MODIFIERS = { altKey: false, ctrlKey: !mac, metaKey: mac, shiftKey: true }
+
 // The searchbox's page handler, with match positions mapped back to
 // Chrome's result; Grove's own matches open (or are forgotten) through the
 // host.
@@ -268,9 +336,19 @@ function translate(
             const m = (a[i + 4] ?? {}) as { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }
             const newTab = isNewTabSearch() || !!(m.ctrlKey || m.metaKey || m.shiftKey) || button === 1
             send({ type: 'open', url: src.grove.url, newTab })
+            if (key === 'openAutocompleteMatch') matchOpened()
             return
           }
-          return call(...(src ? withLine(a, i, src.chrome) : a))
+          if (key !== 'openAutocompleteMatch') return call(...(src ? withLine(a, i, src.chrome) : a))
+          // A new tab's search opens in a new foreground tab: the browser
+          // takes where to open from the modifiers given with the match
+          // (..., mouseButton, modifiers, viaKeyboard), as a click's.
+          if (isNewTabSearch() && typeof a[i + 4] === 'object') {
+            a = a.map((x, j) => (j === i + 4 ? NEW_TAB_MODIFIERS : j === i + 5 && typeof x === 'boolean' ? false : x))
+          }
+          const r = call(...(src ? withLine(a, i, src.chrome) : a))
+          matchOpened()
+          return r
         }
       }
       return call
