@@ -60,7 +60,8 @@ Chromium browser on the computer shares, Google Chrome included), and Grove
 isn't offered as a default browser.
 
 `./install.sh` is the developer's install: this checkout, with the system
-Chromium and mise's Node.
+Chromium and mise's Node. Over a release install it puts the checkout into
+the copy of Grove the release runs instead, with the release's Chromium.
 
 ## Releases and updates
 

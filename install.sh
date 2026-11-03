@@ -2,6 +2,11 @@
 # Installs this checkout as the `grove` command and desktop app:
 # builds the UI, copies what the launcher needs to ~/.local/opt/grove-ui,
 # and points ~/.local/bin/grove at it. Run it again to update.
+#
+# Where Grove was installed from a release (~/.local/bin/grove links to a
+# bundle's launcher, packaging/linux/grove), the checkout goes into the
+# copy of the app that bundle runs instead, keeping its Chromium, Node and
+# launcher (the release's updates still replace it).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -14,6 +19,18 @@ if [ "$(node -p 'process.versions.node.split(".")[0] >= 23')" != true ]; then
 fi
 
 node build.mjs
+
+bundle="$(dirname "$(readlink -f "$bin" 2>/dev/null || echo "$bin")")"
+if [ -f "$bundle/bundle.json" ]; then
+  app="${XDG_DATA_HOME:-$HOME/.local/share}/grove/app"
+  mkdir -p "$app"
+  # (Its .installed says which release or bundle it came from.)
+  rsync -a --delete --exclude .installed launcher host shared extension dist package.json "$app/"
+  echo "installed into the release install: $app"
+  echo "restart Grove for host and extension changes (the UI reloads itself)"
+  exit 0
+fi
+
 mkdir -p "$dest"
 rsync -a --delete launcher host shared extension dist package.json "$dest/"
 # Marks the copy as installed: it may update itself from GitHub releases.
@@ -24,6 +41,8 @@ if [ -f "$bin" ] && ! grep -q grove-ui "$bin" && [ ! -e "$bin.before-grove-ui" ]
   cp "$bin" "$bin.before-grove-ui"
 fi
 mkdir -p "$(dirname "$bin")"
+# Never write through a link into whatever it points at.
+[ -L "$bin" ] && rm "$bin"
 cat > "$bin" <<SH
 #!/usr/bin/env bash
 # Grove (grove-ui, installed from $(pwd) by install.sh).
