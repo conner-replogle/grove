@@ -245,7 +245,7 @@ class SettingsView {
       ),
       toggleRow(
         'Debug mode',
-        'Keeps the last 30 seconds of Grove: a recording of its windows, its logs, and what you click and press in its sidebar and URL bar. The bug button in the sidebar saves them to Downloads, to send with a bug report.',
+        'Keeps the last 30 seconds of Grove: a recording of its windows, its logs, and what you click and press in its sidebar and URL bar. Save bug report, in the ⋮ menu, saves them to Downloads, to send with a bug report.',
         this.debug,
         (on) => this.set({ debug: on })
       )

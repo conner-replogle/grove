@@ -1,22 +1,9 @@
 // Debug mode's side in the window (the host keeps the 30 seconds:
 // host/debug.ts). While it is on, the clicks, keys and focus moves in the
-// window's UI go to the console, which the launcher keeps; the sidebar
-// shows a bug button that saves the packet; and a note says where it went.
-import bugSvg from 'lucide-static/icons/bug.svg'
-import type { WindowState } from '../shared/protocol.ts'
+// window's UI go to the console, which the launcher keeps; the app menu
+// (app-menu.ts) has an item that saves the packet; and a note says where
+// it went.
 import { send, subscribe } from './host-client'
-import { svg } from './svg'
-
-export function debugButton(s: WindowState): HTMLButtonElement | undefined {
-  if (!s.debug) return undefined
-  const b = document.createElement('button')
-  b.className = 'tbtn debug-button'
-  b.title = s.debug.saving ? 'Saving…' : 'Save the last 30 seconds for a bug report'
-  b.disabled = s.debug.saving
-  b.append(svg(bugSvg))
-  b.addEventListener('click', () => send({ type: 'debugSave' }))
-  return b
-}
 
 export function recordDebugInput(): void {
   let on = false

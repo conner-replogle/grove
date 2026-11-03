@@ -17,7 +17,6 @@ import { COLORS, MAX_SPLIT, type Group, type SplitLayout } from '../shared/types
 import folderInputSvg from 'lucide-static/icons/folder-input.svg'
 import privateSvg from 'lucide-static/icons/venetian-mask.svg'
 import { Dragger } from './drag'
-import { debugButton } from './debug'
 import { downloadsButton, type Seen } from './downloads'
 import { send, subscribe } from './host-client'
 import { icons } from './icons'
@@ -469,12 +468,10 @@ class GroveSidebar extends HTMLElement {
     add.title = 'New workspace'
     add.append(svg(icons.plus))
     add.addEventListener('click', () => this.openEditor(undefined))
-    // Bottom left, as in Zen: downloads (and in Debug mode, the bug
-    // button). Settings are in the app menu (app-menu.ts).
+    // Bottom left, as in Zen: downloads. Settings (and in Debug mode, the
+    // bug report) are in the app menu (app-menu.ts).
     const left = el('div', 'foot-left')
     left.append(downloadsButton(s, this.seenDownloads))
-    const bug = debugButton(s)
-    if (bug) left.append(bug)
     // A blank window has no workspaces of its own to switch between.
     if (s.blank) foot.append(left)
     else foot.append(left, switcher, add)

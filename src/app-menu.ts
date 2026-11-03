@@ -1,11 +1,13 @@
 // The app menu: the ⋮ button at the end of the sidebar's top row, with what
 // other browsers keep there (new windows, history, downloads, bookmarks,
-// passwords, extensions, zoom, print, settings) and Grove's own settings.
+// passwords, extensions, zoom, print, settings), Grove's own settings, and
+// in Debug mode, saving the bug report packet (debug.ts).
 // Its last item opens Chrome's own app menu, for the rest (find, cast,
 // save page, developer tools, help, exit).
 import historySvg from 'lucide-static/icons/history.svg'
 import downloadSvg from 'lucide-static/icons/download.svg'
 import bookmarkSvg from 'lucide-static/icons/bookmark.svg'
+import bugSvg from 'lucide-static/icons/bug.svg'
 import ellipsisSvg from 'lucide-static/icons/ellipsis.svg'
 import keySvg from 'lucide-static/icons/key-round.svg'
 import menuSvg from 'lucide-static/icons/ellipsis-vertical.svg'
@@ -138,6 +140,9 @@ export function showAppMenu(): HTMLElement {
       el('div', 'grove-app-menu-separator'),
       item(settingsSvg, 'Grove settings', openSettings),
       item(wrenchSvg, 'Chrome settings', page('chrome://settings')),
+      ...(state?.debug
+        ? [item(bugSvg, state.debug.saving ? 'Saving bug report…' : 'Save bug report', command({ type: 'debugSave' }), '', state.debug.saving)]
+        : []),
       item(ellipsisSvg, 'More from Chrome…', chromeMenu)
     )
     // Under the button, its left edge with the button's, kept in the window.
