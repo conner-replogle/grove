@@ -253,6 +253,7 @@ export interface WindowState {
 export type HostCommand =
   | { type: 'hello' }
   | { type: 'activate'; entryId: string }
+  // A pinned tab or an Essential only unloads.
   | { type: 'close'; entryId: string }
   // Closes an entry's page and keeps the entry; selecting it reopens it.
   | { type: 'unload'; entryId: string }

@@ -557,10 +557,11 @@ export class GroveHost {
     }
     if (this.closingByHost.delete(tabId) || !entryId) return this.queuePush()
     // Closing a window freezes its tabs; closing a tab closes its entry
-    // (and the window moves on to the tab it was split with, if any).
+    // (and the window moves on to the tab it was split with, if any). A
+    // pinned tab or an Essential closed that way is only unloaded.
     if (!windowClosing) {
       const siblings = this.splitMembers(entryId)
-      this.closeEntries([entryId])
+      if (!this.keptOnClose(entryId)) this.closeEntries([entryId])
       if (windowId !== undefined) void this.afterLoss(windowId, { prefer: siblings, lost: [entryId] })
     }
     this.queuePush()
@@ -648,6 +649,8 @@ export class GroveHost {
       case 'activate':
         return this.activateIn(windowId, c.entryId)
       case 'close':
+        // A pinned tab or an Essential only unloads (unpin it to close it).
+        if (this.keptOnClose(c.entryId)) return this.unloadByUser(this.splitMembers(c.entryId))
         return this.closeEntriesEverywhere([c.entryId])
       case 'unload':
         // A split unloads whole, as in Zen.
@@ -1184,6 +1187,14 @@ export class GroveHost {
   private async showSplits(): Promise<void> {
     for (const windowId of this.windows.keys()) await this.showSplit(windowId)
     this.pushAll()
+  }
+
+  // Whether closing the entry's tab keeps the entry, unloaded: a pin or an
+  // Essential (not in a private window, whose tabs Grove doesn't unload).
+  private keptOnClose(entryId: string): boolean {
+    const found = M.findEntry(this.model, entryId)
+    if (!found || found.workspace?.blank) return false
+    return !found.workspace || found.entry.pinned === true
   }
 
   // The entries split with `entryId` (itself included), or just it.

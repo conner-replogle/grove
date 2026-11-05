@@ -256,9 +256,8 @@ class GroveSidebar extends HTMLElement {
     this.wire(tile, e, [
       ['Remove from Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: false })],
       ['Pin to this workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: true })],
-      'separator',
-      ...unloadItem(e),
-      ['Close', () => send({ type: 'close', entryId: e.id })]
+      // Closing an Essential only unloads it.
+      ...(e.live ? (['separator', ['Close', () => send({ type: 'close', entryId: e.id })]] as MenuItem[]) : [])
     ])
     return tile
   }
@@ -267,14 +266,16 @@ class GroveSidebar extends HTMLElement {
     const row = el('div', `tab${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}${s.paused?.entryId === e.id ? ' paused' : ''}`)
     row.title = `${e.title}\n${e.url}`
     row.append(favicon(e), el('span', 'label', e.title || e.url || 'New Tab'))
+    // A pin's close button only unloads it; an unloaded pin's unpins it.
+    const unpin = section === 'pinned' && !e.live
     const close = el('button', 'close')
-    close.title = 'Close tab'
-    close.append(svg(icons.x))
+    close.title = unpin ? 'Unpin tab' : 'Close tab'
+    close.append(svg(unpin ? icons.pinOff : icons.x))
     close.addEventListener('mousedown', (ev) => ev.stopPropagation())
     close.addEventListener('pointerdown', (ev) => ev.stopPropagation())
     close.addEventListener('click', (ev) => {
       ev.stopPropagation()
-      send({ type: 'close', entryId: e.id })
+      send(unpin ? { type: 'setPinned', entryId: e.id, pinned: false } : { type: 'close', entryId: e.id })
     })
     row.append(close)
     row.dataset.kind = 'tab'
@@ -297,8 +298,9 @@ class GroveSidebar extends HTMLElement {
       ...others.map((w): MenuItem => [`Move to ${w.name}`, () => send({ type: 'moveToWorkspace', entryId: e.id, workspaceId: w.id })]),
       ...(ownWindow ? [['Move to new window', () => send({ type: 'tearOff', entryId: e.id })] as MenuItem] : []),
       'separator',
-      ...unloadItem(e, s),
-      ['Close', () => send({ type: 'close', entryId: e.id })]
+      // Closing a pin only unloads it.
+      ...(section === 'pinned' ? [] : unloadItem(e, s)),
+      ...(section === 'pinned' && !e.live ? [] : [['Close', () => send({ type: 'close', entryId: e.id })] as MenuItem])
     ])
     return row
   }
@@ -530,7 +532,9 @@ class GroveSidebar extends HTMLElement {
   private openMenu(ev: MouseEvent, items: MenuItem[]): void {
     this.closeMenu()
     const menu = el('div', 'menu')
-    for (const item of items) {
+    // No separator first, last or twice in a row.
+    const shown = items.filter((x, i) => x !== 'separator' || (i > 0 && items[i - 1] !== 'separator' && i < items.length - 1))
+    for (const item of shown) {
       if (item === 'separator') {
         menu.append(el('div', 'menu-separator'))
         continue
