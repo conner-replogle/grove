@@ -5,7 +5,7 @@
 // and any number of times to the same result. A record is never removed,
 // only marked not alive, so a removal wins over older edits.
 // Which window shows what, and pages' own state, stay on the device.
-import { COLORS, isWorkspaceColor, type Color, type Entry, type Group, type Model, type Workspace } from '../../shared/types.ts'
+import { COLORS, isWorkspaceColor, type Color, type Entry, type Group, type Model, type PinnedPage, type Workspace } from '../../shared/types.ts'
 import { normalize } from '../model.ts'
 import { parseSplits } from '../split.ts'
 import type { Stamp } from './hlc.ts'
@@ -19,7 +19,7 @@ export type Value = string | number | boolean | null
 //   meta       lastWorkspace                    (one record, id META)
 //   workspace  name, color, icon, active, splits (JSON), order
 //   entry      parent ('essentials' or a workspace id), pinned, url, title,
-//              favicon, group, lastActive, order
+//              favicon, pin (JSON), group, lastActive, order
 //   group      parent (a workspace id), title, color, collapsed, pinned
 export interface SyncRecord {
   kind: Kind
@@ -54,6 +54,22 @@ const parseJson = (s: string | undefined): unknown => {
 // Favicons in data URLs can be big; sync only small ones.
 const syncedFavicon = (f: string | undefined): string | null =>
   f && !(f.startsWith('data:') && f.length > 2048) ? f : null
+
+// A pin's own page, as JSON (its favicon only if it's one that syncs).
+const syncedPin = (pin: PinnedPage | undefined): string | null => {
+  if (!pin) return null
+  const favicon = syncedFavicon(pin.favicon)
+  return JSON.stringify({ url: pin.url, title: pin.title, ...(favicon ? { favicon } : {}) })
+}
+const parsePin = (s: string | undefined, local: PinnedPage | undefined): PinnedPage | undefined => {
+  const p = parseJson(s) as Partial<PinnedPage> | undefined
+  if (!p || typeof p.url !== 'string') return undefined
+  const pin: PinnedPage = { url: p.url, title: typeof p.title === 'string' ? p.title : '' }
+  // An icon too big to sync stays on the device that has it.
+  const favicon = typeof p.favicon === 'string' ? p.favicon : local?.url === p.url && !syncedFavicon(local.favicon) ? local.favicon : undefined
+  if (favicon) pin.favicon = favicon
+  return pin
+}
 
 // Whether a record is one this device syncs.
 function inScope(r: SyncRecord | undefined, scope: Scope): boolean {
@@ -136,6 +152,7 @@ function project(model: Model, records: Records, scope: Scope): { wanted: Map<st
       url: e.url,
       title: e.title,
       favicon: syncedFavicon(e.favicon),
+      pin: syncedPin(e.pin),
       group: e.groupId ?? null,
       lastActive: e.lastActive
     }
@@ -255,6 +272,8 @@ export function materialize(model: Model, records: Records, scope: Scope = ALL):
       lastActive: typeof lastActive === 'number' ? lastActive : (local?.lastActive ?? 0)
     }
     if (favicon) e.favicon = favicon
+    const pin = parsePin(str(r, 'pin'), local?.pin)
+    if (pin) e.pin = pin
     if (group) e.groupId = group
     return e
   }

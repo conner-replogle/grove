@@ -33,11 +33,20 @@ export interface Entry {
   title: string
   favicon?: string
   pinned: boolean
+  // A pin's or an Essential's own page (Zen's pinned URL): where it goes
+  // back to when reset, wherever the tab has since navigated.
+  pin?: PinnedPage
   groupId?: string
   // Back/forward list for restoring a frozen tab; empty until it has loaded.
   history: HistoryEntry[]
   historyIndex: number
   lastActive: number
+}
+
+export interface PinnedPage {
+  url: string
+  title: string
+  favicon?: string
 }
 
 // A folder of tabs. Its entries sit next to each other in the tab order.

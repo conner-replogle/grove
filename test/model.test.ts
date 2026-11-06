@@ -17,6 +17,8 @@ import {
   sendToWorkspace,
   emptyModel,
   getWorkspace,
+  keepPins,
+  pinChanged,
   moveEntry,
   moveWorkspace,
   neighborWorkspace,
@@ -513,5 +515,41 @@ describe('workspace colors', () => {
     expect(isWorkspaceColor('#4a8fe')).toBe(false)
     expect(isWorkspaceColor('teal')).toBe(false)
     expect(isWorkspaceColor(undefined)).toBe(false)
+  })
+})
+
+describe('pinned pages', () => {
+  const pinnedModel = () => {
+    let m = emptyModel()
+    const home = m.workspaces[0].id
+    m = withWorkspace(m, home, (w) => addEntry(w, { url: 'https://mail.test/#inbox', title: 'Mail' }, { pinned: true })[0])
+    m = withWorkspace(m, home, (w) => addEntry(w, { url: 'https://news.test/', title: 'News' })[0])
+    return keepPins(m)
+  }
+
+  it('are remembered for pins and Essentials, and dropped on unpin', () => {
+    let m = pinnedModel()
+    const [mail, news] = m.workspaces[0].entries
+    expect(mail.pin).toEqual({ url: 'https://mail.test/#inbox', title: 'Mail' })
+    expect(news.pin).toBeUndefined()
+    expect(keepPins(m)).toBe(m)
+    m = keepPins(moveTo(m, news.id, m.workspaces[0].id, { section: 'essentials' }))
+    expect(m.essentials[0].pin?.url).toBe('https://news.test/')
+    m = keepPins(withWorkspace(m, m.workspaces[0].id, (w) => setPinned(w, mail.id, false)))
+    expect(m.workspaces[0].entries[0].pin).toBeUndefined()
+  })
+
+  it('count as changed only on another page, not another #fragment', () => {
+    const m = pinnedModel()
+    const mail = m.workspaces[0].entries[0]
+    expect(pinChanged({ ...mail, url: 'https://mail.test/#sent' })).toBe(false)
+    expect(pinChanged({ ...mail, url: 'https://mail.test/settings' })).toBe(true)
+    expect(pinChanged({ ...mail, url: 'chrome://newtab/' })).toBe(false)
+  })
+
+  it('wait for a real page before remembering one', () => {
+    let m = emptyModel()
+    m = keepPins(withWorkspace(m, m.workspaces[0].id, (w) => addEntry(w, { url: 'chrome://newtab/' }, { pinned: true })[0]))
+    expect(m.workspaces[0].entries[0].pin).toBeUndefined()
   })
 })

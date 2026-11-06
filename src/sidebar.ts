@@ -41,6 +41,8 @@ const faviconFor = (e: EntryView): string =>
 
 type MenuItem = [string, () => void] | 'separator'
 
+const BACK_TO_PIN = 'Back to pinned url'
+
 class GroveSidebar extends HTMLElement {
   private readonly root = this.attachShadow({ mode: 'open' })
   // The list and the workspace bar; overlays (menu, editor) sit beside it so
@@ -254,6 +256,7 @@ class GroveSidebar extends HTMLElement {
     tile.append(favicon(e))
     tile.dataset.kind = 'essential'
     this.wire(tile, e, [
+      ...this.pinItems(e, 'Essential'),
       ['Remove from Essentials', () => send({ type: 'setEssential', entryId: e.id, essential: false })],
       ['Pin to this workspace', () => send({ type: 'setPinned', entryId: e.id, pinned: true })],
       // Closing an Essential only unloads it.
@@ -265,7 +268,16 @@ class GroveSidebar extends HTMLElement {
   private tabRow(e: EntryView, s: WindowState, section: 'pinned' | 'tabs'): HTMLElement {
     const row = el('div', `tab${e.id === s.activeEntryId ? ' selected' : ''}${e.live ? '' : ' frozen'}${s.paused?.entryId === e.id ? ' paused' : ''}`)
     row.title = `${e.title}\n${e.url}`
-    row.append(favicon(e), el('span', 'label', e.title || e.url || 'New Tab'))
+    const label = el('span', 'label', e.title || e.url || 'New Tab')
+    if (section === 'pinned' && e.pinChanged && e.pin) {
+      // Zen's changed pin: the icon becomes a button back to the pin's own
+      // page, set off from the title by a slash.
+      row.classList.add('pin-changed')
+      const sublabel = el('span', 'sublabel', BACK_TO_PIN)
+      const titles = el('span', 'titles')
+      titles.append(label, sublabel)
+      row.append(this.resetPinButton(e, sublabel), titles)
+    } else row.append(favicon(e), label)
     // A pin's close button only unloads it; an unloaded pin's unpins it.
     const unpin = section === 'pinned' && !e.live
     const close = el('button', 'close')
@@ -286,6 +298,7 @@ class GroveSidebar extends HTMLElement {
     // A blank window's only tab is in a window of its own already.
     const ownWindow = !s.blank || s.workspace.entries.length > 1
     this.wire(row, e, [
+      ...(section === 'pinned' ? this.pinItems(e, 'pinned') : []),
       ...this.splitItems(e, s),
       ...(s.blank
         ? []
@@ -303,6 +316,42 @@ class GroveSidebar extends HTMLElement {
       ...(section === 'pinned' && !e.live ? [] : [['Close', () => send({ type: 'close', entryId: e.id })] as MenuItem])
     ])
     return row
+  }
+
+  // Zen's reset button: shows the pin's own icon on hover; a click takes
+  // the tab back there, Ctrl+click keeps this page as a tab of its own.
+  private resetPinButton(e: EntryView, sublabel: HTMLElement): HTMLElement {
+    const button = el('button', 'reset-pin')
+    button.title = 'Reset and pin tab'
+    const own = el('img', 'favicon pin-favicon')
+    own.src = faviconFor({ ...e, url: e.pin!.url, favicon: e.pin!.favicon, faviconData: undefined })
+    own.alt = ''
+    own.draggable = false
+    button.append(favicon(e), own)
+    const hint = (ev: MouseEvent): void => {
+      sublabel.textContent = ev.ctrlKey || ev.metaKey ? 'Separate from pinned tab' : BACK_TO_PIN
+    }
+    button.addEventListener('pointerenter', hint)
+    button.addEventListener('pointermove', hint)
+    button.addEventListener('pointerleave', () => (sublabel.textContent = BACK_TO_PIN))
+    button.addEventListener('mousedown', (ev) => ev.stopPropagation())
+    button.addEventListener('pointerdown', (ev) => ev.stopPropagation())
+    button.addEventListener('click', (ev) => {
+      ev.stopPropagation()
+      send({ type: 'resetPin', entryId: e.id, separate: ev.ctrlKey || ev.metaKey })
+    })
+    return button
+  }
+
+  // Zen's items for a pin's or an Essential's own page, once it has gone
+  // elsewhere: back to it, or make this page its own.
+  private pinItems(e: EntryView, what: 'pinned' | 'Essential'): MenuItem[] {
+    if (!e.pin || !e.pinChanged) return []
+    return [
+      [`Reset ${what} tab`, () => send({ type: 'resetPin', entryId: e.id })],
+      [`Replace ${what} URL with current`, () => send({ type: 'replacePin', entryId: e.id })],
+      'separator'
+    ]
   }
 
   // Split view, in a tab's menu (Zen's Add Split View…, Join Tabs and

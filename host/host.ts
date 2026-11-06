@@ -246,7 +246,7 @@ export class GroveHost {
     this.sitePermissions = sitePermissions
     // A blank window's tabs go with it: none are left from a Grove that
     // didn't get to close them.
-    this.model = M.withoutBlank(store.load())
+    this.model = M.keepPins(M.withoutBlank(store.load()))
   }
 
   // ---- Start-up ----
@@ -562,6 +562,7 @@ export class GroveHost {
     if (!windowClosing) {
       const siblings = this.splitMembers(entryId)
       if (!this.keptOnClose(entryId)) this.closeEntries([entryId])
+      else this.backToPin(entryId)
       if (windowId !== undefined) void this.afterLoss(windowId, { prefer: siblings, lost: [entryId] })
     }
     this.queuePush()
@@ -649,8 +650,13 @@ export class GroveHost {
       case 'activate':
         return this.activateIn(windowId, c.entryId)
       case 'close':
-        // A pinned tab or an Essential only unloads (unpin it to close it).
-        if (this.keptOnClose(c.entryId)) return this.unloadByUser(this.splitMembers(c.entryId))
+        // A pinned tab or an Essential only unloads (unpin it to close it),
+        // and goes back to its own page, as in Zen.
+        if (this.keptOnClose(c.entryId)) {
+          const members = this.splitMembers(c.entryId)
+          await this.unloadByUser(members)
+          return members.forEach((id) => this.backToPin(id))
+        }
         return this.closeEntriesEverywhere([c.entryId])
       case 'unload':
         // A split unloads whole, as in Zen.
@@ -668,6 +674,14 @@ export class GroveHost {
         // A split's tabs are pinned and unpinned together.
         return this.editWorkspace(b, (ws) =>
           M.splitMembers(ws, c.entryId).reduce((w, id) => M.setPinned(w, id, c.pinned), ws)
+        )
+      case 'resetPin':
+        return this.resetPin(windowId, c.entryId, !!c.separate)
+      case 'replacePin':
+        return this.update((m) =>
+          M.editEntry(m, c.entryId, (e) =>
+            e.pin ? { ...e, pin: { url: e.url, title: e.title, ...(e.favicon ? { favicon: e.favicon } : {}) } } : e
+          )
         )
       case 'setEssential':
         return this.moveEntry(windowId, c.entryId, { section: c.essential ? 'essentials' : 'tabs' })
@@ -1189,6 +1203,49 @@ export class GroveHost {
     this.pushAll()
   }
 
+  // An unloaded pin or Essential goes back to its own page: selecting it
+  // opens that, not the page it was on (whose session is let go).
+  private backToPin(entryId: string): void {
+    const pin = this.entry(entryId)?.pin
+    if (!pin || this.tabOf.has(entryId)) return
+    this.sessions.delete(entryId)
+    this.snapshots.delete(entryId)
+    this.update((m) =>
+      M.editEntry(m, entryId, (e) => ({ ...e, url: pin.url, title: pin.title, favicon: pin.favicon, history: [], historyIndex: -1 }))
+    )
+  }
+
+  // Zen's reset button on a pin that went elsewhere: the tab goes back to
+  // the pin's own page. With `separate` (Ctrl+click), the page it was on
+  // stays open as a tab of its own, below the pins, and the pin reopens
+  // fresh at its page.
+  private async resetPin(windowId: number, entryId: string, separate: boolean): Promise<void> {
+    const found = M.findEntry(this.model, entryId)
+    const pin = found?.entry.pin
+    if (!found || !pin) return
+    const tabId = this.tabOf.get(entryId)
+    if (separate && found.workspace && tabId !== undefined && !M.samePage(found.entry.url, pin.url)) {
+      const { url, title, favicon } = found.entry
+      let fresh: Entry | undefined
+      this.update((m) =>
+        M.withWorkspace(m, found.workspace!.id, (ws) => {
+          const pins = ws.entries.filter((e) => e.pinned).length
+          ;[ws, fresh] = M.addEntry(ws, { url, title, favicon }, { index: pins })
+          return ws
+        })
+      )
+      // The open page is the new tab's now; the pin has none.
+      this.unmap(entryId)
+      this.map(fresh!.id, tabId)
+      this.backToPin(entryId)
+      this.queueOrder()
+    } else if (tabId !== undefined) {
+      this.update((m) => M.editEntry(m, entryId, (e) => ({ ...e, url: pin.url, title: pin.title, favicon: pin.favicon })))
+      await this.bridge?.call('navigate', { tabId, url: pin.url }).catch((e: unknown) => this.log('reset pin', e))
+    } else this.backToPin(entryId)
+    await this.activateIn(windowId, entryId)
+  }
+
   // Whether closing the entry's tab keeps the entry, unloaded: a pin or an
   // Essential (not in a private window, whose tabs Grove doesn't unload).
   private keptOnClose(entryId: string): boolean {
@@ -1652,7 +1709,7 @@ export class GroveHost {
   }
 
   private update(fn: (m: Model) => Model): void {
-    const next = fn(this.model)
+    const next = M.keepPins(fn(this.model))
     if (next === this.model) return
     this.model = next
     this.store.save(M.withoutBlank(next))
@@ -1841,6 +1898,8 @@ export class GroveHost {
         favicon: e.favicon,
         faviconData: t === undefined ? this.favicons?.get(e.url, e.favicon) : undefined,
         pinned: e.pinned,
+        pin: e.pin,
+        pinChanged: M.pinChanged(e),
         groupId: e.groupId,
         splitId: splitOf.get(e.id),
         live: t !== undefined,

@@ -89,6 +89,18 @@ describe('records', () => {
     expect(commit(copy(records), back, clock('b')).size).toBe(0)
   })
 
+  it("carry a pin's own page", () => {
+    let m = M.keepPins(model({ Home: ['*mail'] }))
+    const id = m.workspaces[0].entries[0].id
+    m = M.editEntry(m, id, (e) => ({ ...e, url: 'https://mail.test/inbox', title: 'Inbox' }))
+    const records: Records = new Map()
+    commit(records, m, clock('a'))
+    const back = materialize({ ...M.emptyModel(), workspaces: [] }, copy(records))
+    expect(back.workspaces[0].entries[0].pin).toEqual({ url: 'https://mail.test/', title: 'mail' })
+    expect(M.pinChanged(back.workspaces[0].entries[0])).toBe(true)
+    expect(commit(copy(records), back, clock('b')).size).toBe(0)
+  })
+
   it('merge concurrent edits field by field', () => {
     const base = model({ Home: ['a', 'b', 'c'], Work: ['x'] })
     const shared: Records = new Map()

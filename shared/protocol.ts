@@ -1,7 +1,7 @@
 // What the Grove host and the UI in each window say to each other.
 // The host pushes a WindowState whenever anything a window shows changes;
 // the UI sends HostCommands and keeps no state of its own.
-import type { Group, Section, SplitLayout, SplitNode, SplitSide, WorkspaceColor } from './types.ts'
+import type { Group, PinnedPage, Section, SplitLayout, SplitNode, SplitSide, WorkspaceColor } from './types.ts'
 
 export interface EntryView {
   id: string
@@ -13,6 +13,10 @@ export interface EntryView {
   // cache often lacks it), once Grove has fetched it.
   faviconData?: string
   pinned: boolean
+  // A pin's or an Essential's own page, and whether the pin (not an
+  // Essential) has gone to another page since (Zen's changed pin).
+  pin?: PinnedPage
+  pinChanged?: boolean
   groupId?: string
   // The split view it's in.
   splitId?: string
@@ -263,6 +267,11 @@ export type HostCommand =
   | { type: 'organize' }
   | { type: 'newTab' }
   | { type: 'setPinned'; entryId: string; pinned: boolean }
+  // Takes a pin or an Essential back to its own page; `separate` keeps the
+  // page it was on open as a tab of its own.
+  | { type: 'resetPin'; entryId: string; separate?: boolean }
+  // Makes the page a pin or an Essential is on its own page.
+  | { type: 'replacePin'; entryId: string }
   | { type: 'setEssential'; entryId: string; essential: boolean }
   | { type: 'newFolder'; entryId: string }
   | { type: 'toggleFolder'; groupId: string }

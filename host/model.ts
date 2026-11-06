@@ -144,6 +144,7 @@ export function neighborWorkspace(model: Model, id: string, offset: number): str
 export interface NewEntry {
   url: string
   title?: string
+  favicon?: string
   history?: Entry['history']
   historyIndex?: number
 }
@@ -168,6 +169,7 @@ export function addEntry(ws: Workspace, init: NewEntry, place: Placement = {}): 
     historyIndex: init.historyIndex ?? -1,
     lastActive: 0
   }
+  if (init.favicon) entry.favicon = init.favicon
   let index = place.index ?? ws.entries.length
   if (place.index === undefined && after) index = ws.entries.indexOf(after) + 1
   const entries = [...ws.entries]
@@ -634,4 +636,54 @@ export function placeWorkspace(model: Model, id: string, beforeId?: string): Mod
   const rest = model.workspaces.filter((w) => w.id !== id)
   const at = beforeId ? rest.findIndex((w) => w.id === beforeId) : -1
   return moveWorkspace(model, id, at < 0 ? rest.length : at)
+}
+
+// ---- Pinned pages (Zen's pinned URL) ----
+
+// Whether two addresses are the same page, as Zen compares a pin's page
+// with the tab's: the part after # doesn't count.
+export function samePage(a: string, b: string): boolean {
+  const page = (url: string): string => {
+    try {
+      const u = new URL(url)
+      u.hash = ''
+      return u.href
+    } catch {
+      return url.split('#')[0]
+    }
+  }
+  return page(a) === page(b)
+}
+
+// A page an entry can be pinned to: not a New Tab page, which isn't one.
+const pinnable = (url: string): boolean => !!url && !/^chrome:\/\/(newtab|new-tab-page)\/?$/.test(url)
+
+// Pins and Essentials remember the page they were pinned on (its first
+// one that's a real page); other tabs remember none.
+export function keepPins(model: Model): Model {
+  const fix = (e: Entry, pinned: boolean): Entry => {
+    if (!pinned) {
+      if (!e.pin) return e
+      const { pin: _, ...rest } = e
+      return rest
+    }
+    if (e.pin || !pinnable(e.url)) return e
+    return { ...e, pin: { url: e.url, title: e.title, ...(e.favicon ? { favicon: e.favicon } : {}) } }
+  }
+  const fixAll = (list: Entry[], pinned?: boolean): Entry[] => {
+    const next = list.map((e) => fix(e, pinned ?? e.pinned))
+    return next.some((e, i) => e !== list[i]) ? next : list
+  }
+  const essentials = fixAll(model.essentials, true)
+  const workspaces = model.workspaces.map((ws) => {
+    const entries = fixAll(ws.entries)
+    return entries === ws.entries ? ws : { ...ws, entries }
+  })
+  if (essentials === model.essentials && workspaces.every((w, i) => w === model.workspaces[i])) return model
+  return { ...model, essentials, workspaces }
+}
+
+// Whether a pin or an Essential has gone to another page than its own.
+export function pinChanged(e: Entry): boolean {
+  return !!e.pin && pinnable(e.url) && !samePage(e.url, e.pin.url)
 }
