@@ -19,9 +19,43 @@
 ;(() => {
   const REQUEST = 'grove:permission-request'
   const ANSWER = 'grove:permission-answer'
-  // Grove's picker popups make the native calls themselves.
+  const HELLO_MAIN = 'grove:hello-main'
+  const HELLO_RELAY = 'grove:hello-relay'
+  const PAIRED = 'grove:paired'
+  const HELPER_ANSWER = 'grove:helper'
+  // Grove's picker popups (see "Pickers" below) are named so, and make the
+  // native calls themselves. A page can name its own window anything, so
+  // the name alone proves nothing: the relay asks the bridge whether this
+  // page really is in a popup window, where Chrome's own dialogs work.
   const HELPER = 'grove-helper:'
-  if (window.name.startsWith(HELPER)) return
+  const claimsHelper = window.name.startsWith(HELPER)
+
+  // The relay and this script talk over a private channel: a node that's
+  // in no document, which the relay hands over before any of the page's
+  // scripts run (both are document_start content scripts, run in manifest
+  // order before the page's own). Events on the document could be sent,
+  // and read, by the page and by any frame's scripts.
+  const listen = EventTarget.prototype.addEventListener
+  const unlisten = EventTarget.prototype.removeEventListener
+  const send = EventTarget.prototype.dispatchEvent
+  let channel = null
+  let helperAnswer
+  const isHelper = new Promise((resolve) => {
+    helperAnswer = resolve
+    if (claimsHelper) setTimeout(() => resolve(false), 3000)
+    else resolve(false)
+  })
+  const paired = (e) => {
+    const node = e.relatedTarget
+    if (channel || !(node instanceof Element) || node.isConnected) return
+    channel = node
+    Reflect.apply(unlisten, document, [HELLO_RELAY, paired, true])
+    Reflect.apply(listen, channel, [ANSWER, onAnswer])
+    Reflect.apply(listen, channel, [HELPER_ANSWER, (e) => helperAnswer(e.detail === '1')])
+    Reflect.apply(send, channel, [new Event(PAIRED)])
+  }
+  Reflect.apply(listen, document, [HELLO_RELAY, paired, true])
+  Reflect.apply(send, document, [new Event(HELLO_MAIN)])
 
   const nativeToString = Function.prototype.toString
   const disguised = new WeakMap()
@@ -38,13 +72,20 @@
     disguised.set(proxy, orig)
     owner[name] = proxy
   }
+  // The APIs Grove's picker popups call for the page that opened them: in a
+  // popup the bridge vouches for, the native call; anywhere else, Grove's.
+  const wrapPicker = (owner, name, apply) =>
+    wrap(owner, name, (orig, self, args) =>
+      claimsHelper
+        ? isHelper.then((ok) => (ok ? Reflect.apply(orig, self, args) : apply(orig, self, args)))
+        : apply(orig, self, args)
+    )
 
   // The page could replace these later; keep Chrome's own.
   const permissions = navigator.permissions
   const query = Permissions.prototype.query
   const featurePolicy = document.featurePolicy
   const allowsFeature = featurePolicy && Object.getPrototypeOf(featurePolicy).allowsFeature
-  const dispatch = EventTarget.prototype.dispatchEvent.bind(document)
 
   // Grove's kinds: their Permissions API descriptors and permissions policy
   // features.
@@ -82,7 +123,7 @@
   // Grove can't ask (no relay in this frame, or an opaque origin).
   let nextId = 0
   const waiting = new Map()
-  document.addEventListener(ANSWER, (e) => {
+  function onAnswer(e) {
     let a
     try {
       a = JSON.parse(e.detail)
@@ -98,16 +139,17 @@
     clearTimeout(w.timer)
     waiting.delete(a.id)
     w.resolve(a.decision)
-  })
+  }
   const ask = (kinds) =>
     new Promise((resolve) => {
+      if (!channel) return resolve('fallback')
       const id = ++nextId
       const timer = setTimeout(() => {
         waiting.delete(id)
         resolve('fallback')
       }, 2000)
       waiting.set(id, { resolve, timer })
-      dispatch(new CustomEvent(REQUEST, { detail: JSON.stringify({ id, kinds }) }))
+      Reflect.apply(send, channel, [new CustomEvent(REQUEST, { detail: JSON.stringify({ id, kinds }) })])
     })
 
   // Runs `run` once every kind is decided (asking Grove for those that
@@ -438,7 +480,7 @@
     const proto = globalThis[iface]?.prototype
     const nativeList = proto?.[list]
     const property = iface.toLowerCase()
-    wrap(proto, method, (orig, self, args) => {
+    wrapPicker(proto, method, (orig, self, args) => {
       if (!userActive()) return Reflect.apply(orig, self, args)
       const helper = openHelper()
       if (!helper) return Reflect.apply(orig, self, args)
@@ -479,7 +521,7 @@
 
   // ---- Sharing the screen, a window or a tab ----
 
-  wrap(globalThis.MediaDevices?.prototype, 'getDisplayMedia', (orig, self, args) => {
+  wrapPicker(globalThis.MediaDevices?.prototype, 'getDisplayMedia', (orig, self, args) => {
     if (!userActive()) return Reflect.apply(orig, self, args)
     const helper = openHelper()
     if (!helper) return Reflect.apply(orig, self, args)
@@ -544,9 +586,9 @@
   // a window by itself. A FedCM call made anyway gets the popup only from a
   // click; without one it fails, as Chrome's would with nowhere to show it.
 
-  delete window.IdentityCredential
+  if (!claimsHelper) delete window.IdentityCredential
   for (const name of ['get', 'create']) {
-    wrap(globalThis.CredentialsContainer?.prototype, name, (orig, self, args) => {
+    wrapPicker(globalThis.CredentialsContainer?.prototype, name, (orig, self, args) => {
       const options = args[0]
       const dialog = options && typeof options === 'object' && (options.publicKey || options.identity)
       // Passkey autofill waits quietly for the person to pick one; leave it.
@@ -581,7 +623,7 @@
 
   // Chrome only opens its question when the call comes from a click, so the
   // call is made from one in the popup; answering is Chrome's, in the popup.
-  wrap(globalThis.Navigator?.prototype, 'registerProtocolHandler', (orig, self, args) => {
+  wrapPicker(globalThis.Navigator?.prototype, 'registerProtocolHandler', (orig, self, args) => {
     if (!userActive()) return Reflect.apply(orig, self, args)
     const helper = openHelper()
     if (!helper) return Reflect.apply(orig, self, args)

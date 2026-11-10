@@ -41,6 +41,8 @@ function clean(s: GroveSettings): GroveSettings {
     resume: s.resume !== false,
     unloadAfter: UNLOAD_CHOICES.includes(s.unloadAfter) ? s.unloadAfter : DEFAULT_SETTINGS.unloadAfter,
     autoOrganize: s.autoOrganize === true,
-    debug: s.debug === true
+    debug: s.debug === true,
+    agents: s.agents !== false,
+    agentScripts: s.agentScripts === true
   }
 }

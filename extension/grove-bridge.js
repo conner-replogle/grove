@@ -179,6 +179,23 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   return true
 })
 
+// permissions-relay.js asks whether its page, named as one of Grove's
+// picker popups, really is in a popup window (not a Webium one, where
+// Chrome's own permission and picker dialogs would crash or hang it).
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (!message?.groveHelperWindow) return
+  const windowId = sender.tab?.windowId
+  if (windowId === undefined) {
+    respond(false)
+    return
+  }
+  chrome.windows.get(windowId).then(
+    (w) => respond(w.type === 'popup'),
+    () => respond(false)
+  )
+  return true
+})
+
 // Chrome asks before a site downloads several files in a row, and Grove
 // can't see that request coming, so let sites download (each download
 // still shows up as usual).

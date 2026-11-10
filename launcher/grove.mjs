@@ -719,7 +719,14 @@ async function attachBridge(sessionId, waiting) {
     await host.attach(bridge)
     sync.start().catch((e) => console.log('[grove] sync:', e.message))
     // Local agents (grove mcp), once there are windows for their tabs.
-    new AgentServer({ cdp, host, bridge, version: updater.current, log: (...a) => console.log('[grove]', ...a) }).listen(agentSocket(PROFILE))
+    new AgentServer({
+      cdp,
+      host,
+      bridge,
+      version: updater.current,
+      log: (...a) => console.log('[grove]', ...a),
+      allowed: () => settings.get()
+    }).listen(agentSocket(PROFILE))
   }
   await bridge.call('ready')
 }

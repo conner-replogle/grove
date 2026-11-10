@@ -74,6 +74,9 @@ class SettingsView {
   private readonly chromiumVersion = el('span', 'grove-settings-value')
   private readonly updateText = el('span', 'grove-settings-hint')
   private readonly updateButton = el('button', 'grove-settings-button')
+  // Agents.
+  private readonly agents = toggle()
+  private readonly agentScripts = toggle()
   // General.
   private readonly resume = toggle()
   private readonly debug = toggle()
@@ -228,6 +231,23 @@ class SettingsView {
     )
     organize.append(this.aiOff, this.aiOn, this.aiError)
 
+    // ---- Agents ----
+    const agents = section('Agents')
+    agents.append(
+      toggleRow(
+        'Let agents use Grove',
+        'AI agents on this computer (grove mcp) can open web pages in tabs of their own, in the Agents workspace, with your logins.',
+        this.agents,
+        (on) => this.set({ agents: on })
+      ),
+      toggleRow(
+        'Let agents run scripts',
+        'Agents can also run their own JavaScript in their pages. Script in a page you are logged in to can do anything you could do there.',
+        this.agentScripts,
+        (on) => this.set({ agentScripts: on })
+      )
+    )
+
     // ---- General ----
     const general = section('General')
     general.append(
@@ -265,7 +285,7 @@ class SettingsView {
     })
     about.append(row('Grove', this.groveVersion), row('Chromium', this.chromiumVersion), updateRow)
 
-    this.card.append(head, sync, organize, general, about)
+    this.card.append(head, sync, organize, agents, general, about)
     // Keep "Synced 2 minutes ago" current.
     this.timer = setInterval(() => this.paint(), 20_000)
   }
@@ -350,6 +370,9 @@ class SettingsView {
     this.aiError.hidden = !ai.error
     if (ai.accountId) this.aiAccountInput.value = this.aiTokenInput.value = ''
     this.autoOrganize.checked = s.settings.autoOrganize
+    this.agents.checked = s.settings.agents
+    this.agentScripts.checked = s.settings.agentScripts
+    this.agentScripts.disabled = !s.settings.agents
     this.unloadAfter.value = String(s.settings.unloadAfter)
     this.paintAbout(s)
     this.code.textContent = sync.code ? (this.showCode ? sync.code : '•'.repeat(32)) : ''

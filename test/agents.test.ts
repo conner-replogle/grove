@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renderTree } from '../host/agents.ts'
+import { renderTree, webUrl } from '../host/agents.ts'
 
 const node = (nodeId: string, role: string, name = '', childIds: string[] = [], extra = {}) => ({
   nodeId,
@@ -25,5 +25,28 @@ describe('snapshot', () => {
     expect(tree).toBe(
       ['- link "Home" [ref=e103]', '- textbox "Search" [focused] value="cats" [ref=e105]', '- heading "Title" [level=2] [ref=e106]'].join('\n')
     )
+  })
+})
+
+describe('webUrl', () => {
+  it('adds a scheme to bare addresses', () => {
+    expect(webUrl('example.com')).toBe('https://example.com/')
+    expect(webUrl('example.com:8080/a')).toBe('https://example.com:8080/a')
+    expect(webUrl('localhost:3000')).toBe('http://localhost:3000/')
+    expect(webUrl('127.0.0.1/x')).toBe('http://127.0.0.1/x')
+    expect(webUrl('http://example.com/a?b')).toBe('http://example.com/a?b')
+    expect(webUrl('about:blank')).toBe('about:blank')
+  })
+  it('refuses anything but web pages', () => {
+    for (const url of [
+      'file:///etc/passwd',
+      'chrome://password-manager/passwords',
+      'javascript:alert(1)',
+      'data:text/html,hi',
+      'view-source:https://example.com',
+      'blob:https://example.com/x',
+      'chrome-extension://abc/x.html'
+    ])
+      expect(() => webUrl(url), url).toThrow()
   })
 })

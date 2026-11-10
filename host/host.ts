@@ -1583,7 +1583,8 @@ export class GroveHost {
   // folder that's there (one tab makes no new folder).
   private async organize(workspaceId: string, mode: 'button' | 'idle' | { entryId: string }): Promise<void> {
     const ws = this.model.workspaces.find((w) => w.id === workspaceId)
-    if (!ws || ws.agent || this.organizing.has(workspaceId)) return
+    // Never agent, blank or private workspaces: their tabs stay on this device.
+    if (!ws || ws.agent || ws.blank || ws.private || this.organizing.has(workspaceId)) return
     const shown = new Set([...this.windows.values()].flatMap((b) => this.shownBy(b)))
     const tabs = looseTabs(ws).filter((e) =>
       mode === 'idle' ? !shown.has(e.id) : mode === 'button' || e.id === mode.entryId

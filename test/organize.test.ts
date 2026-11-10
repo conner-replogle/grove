@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, vi } from 'vitest'
 import { Settings } from '../host/settings.ts'
-import { applyOrganize, looseTabs, prepare, sendableUrl } from '../host/organize.ts'
+import { applyOrganize, looseTabs, prepare, sendableTitle, sendableUrl } from '../host/organize.ts'
 import { CLEF, NAMER, organize, type AiRunner } from '../host/organize-ai.ts'
 import { checkKey, keyPath, WorkersAiKeys, workersAi } from '../host/workers-ai.ts'
 import type { OrganizeRequest } from '../shared/organize-protocol.ts'
@@ -172,5 +172,17 @@ describe('organize (host)', () => {
     ws2 = applyOrganize(ws2, { assign: {}, create: [{ title: 'Trip', tabs: ['t0', 't1'] }] }, p2.ids)
     expect(ws2.groups.map((g) => g.title)).toEqual(['Work', 'Trip'])
     expect(ws2.entries.filter((e) => e.groupId === ws2.groups[1].id).map((e) => e.title)).toEqual(['Flights', 'Hotels'])
+  })
+})
+
+describe('sendableTitle', () => {
+  const tab = (title: string, url = 'https://mail.example.com/reset/abc?token=s3cret#x') => ({ title, url }) as import('../shared/types.ts').Entry
+  it('keeps real titles', () => {
+    expect(sendableTitle(tab('Inbox (3) - Mail'))).toBe('Inbox (3) - Mail')
+  })
+  it("never sends a query or fragment in place of a missing or address-like title", () => {
+    expect(sendableTitle(tab(''))).toBe('mail.example.com/reset/abc')
+    expect(sendableTitle(tab('https://mail.example.com/reset/abc?token=s3cret'))).toBe('mail.example.com/reset/abc')
+    expect(sendableTitle(tab('mail.example.com/reset/abc?token=s3cret'))).toBe('mail.example.com/reset/abc')
   })
 })

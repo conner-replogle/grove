@@ -86,8 +86,22 @@ export interface GroveSettings {
   // windows, its logs, the clicks and keys in its UI), for a bug button in
   // the sidebar to save as a packet (host/debug.ts).
   debug: boolean
+  // Let local agents (grove mcp) drive Grove in tabs of their own.
+  agents: boolean
+  // Let them run their own JavaScript in their pages (the evaluate tool).
+  // Off unless the user turns it on: script in a logged-in page can do
+  // anything the user could there.
+  agentScripts: boolean
 }
-export const DEFAULT_SETTINGS: GroveSettings = { syncTabs: 'all', resume: true, unloadAfter: 20, autoOrganize: false, debug: false }
+export const DEFAULT_SETTINGS: GroveSettings = {
+  syncTabs: 'all',
+  resume: true,
+  unloadAfter: 20,
+  autoOrganize: false,
+  debug: false,
+  agents: true,
+  agentScripts: false
+}
 export const UNLOAD_CHOICES = [0, 5, 10, 20, 30, 60, 120]
 
 export interface SyncStatus {

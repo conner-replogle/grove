@@ -25,6 +25,17 @@ export function sendableUrl(url: string): string | undefined {
   }
 }
 
+// What a tab is called, for the model: its title, or the address without
+// its query or fragment when the page has no title or its title is an
+// address (Chrome titles an untitled page with its URL, and queries and
+// fragments can hold tokens).
+export function sendableTitle(e: Entry): string {
+  const title = e.title.trim()
+  const addressLike = !/\s/.test(title) && (/^[a-z][a-z0-9+.-]*:/i.test(title) || /[/?#]/.test(title))
+  if (!title || addressLike) return sendableUrl(e.url) ?? ''
+  return title.slice(0, 300)
+}
+
 // Tabs Organize may move: the workspace's loose web pages.
 export function looseTabs(ws: Workspace): Entry[] {
   return ws.entries.filter((e) => !e.pinned && !e.groupId && sendableUrl(e.url))
@@ -37,12 +48,12 @@ export function prepare(ws: Workspace, tabs: Entry[]): Prepared {
     .slice(0, ORGANIZE_MAX_FOLDERS)
     .map((g, i) => {
       ids.set(`f${i}`, g.id)
-      const examples = ws.entries.filter((e) => e.groupId === g.id).slice(0, 3).map((e) => e.title.slice(0, 300))
+      const examples = ws.entries.filter((e) => e.groupId === g.id).slice(0, 3).map(sendableTitle)
       return { id: `f${i}`, title: g.title.slice(0, 200), examples }
     })
   const sent = tabs.slice(-ORGANIZE_MAX_TABS).map((e, i) => {
     ids.set(`t${i}`, e.id)
-    return { id: `t${i}`, title: (e.title || e.url).slice(0, 300), url: sendableUrl(e.url)! }
+    return { id: `t${i}`, title: sendableTitle(e), url: sendableUrl(e.url)! }
   })
   return { request: { folders, tabs: sent }, ids }
 }

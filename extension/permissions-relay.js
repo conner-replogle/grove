@@ -10,10 +10,30 @@ const topOrigin = () => {
   return ancestors && ancestors.length ? ancestors[ancestors.length - 1] : location.origin
 }
 
-const reply = (id, decision) =>
-  document.dispatchEvent(new CustomEvent(ANSWER, { detail: JSON.stringify({ id, decision }) }))
+// permissions-main.js and this script talk over a private channel: a node
+// in no document, handed over before any of the page's scripts run, so
+// neither the page nor another frame can send requests or answers, or
+// read them. (Events on the document could be sent by anyone there.)
+const HELLO_MAIN = 'grove:hello-main'
+const HELLO_RELAY = 'grove:hello-relay'
+const PAIRED = 'grove:paired'
+const HELPER_ANSWER = 'grove:helper'
+const channel = document.createElement('grove-channel')
+let paired = false
+const announce = () => {
+  if (!paired) document.dispatchEvent(new MouseEvent(HELLO_RELAY, { relatedTarget: channel }))
+}
+document.addEventListener(HELLO_MAIN, announce, true)
+channel.addEventListener(PAIRED, () => {
+  paired = true
+  document.removeEventListener(HELLO_MAIN, announce, true)
+})
+announce()
 
-document.addEventListener(REQUEST, (e) => {
+const reply = (id, decision) =>
+  channel.dispatchEvent(new CustomEvent(ANSWER, { detail: JSON.stringify({ id, decision }) }))
+
+channel.addEventListener(REQUEST, (e) => {
   let request
   try {
     request = JSON.parse(e.detail)
@@ -26,12 +46,31 @@ document.addEventListener(REQUEST, (e) => {
     reply(id, 'fallback')
     return
   }
+  let asked
+  try {
+    asked = chrome.runtime.sendMessage({ grovePermission: { origin, frameOrigin: location.origin, kinds } })
+  } catch {
+    // The extension went away (reloaded): nothing will answer.
+    reply(id, 'dismiss')
+    return
+  }
   reply(id, 'ack')
-  chrome.runtime.sendMessage({ grovePermission: { origin, frameOrigin: location.origin, kinds } }).then(
+  asked.then(
     (decision) => reply(id, decision ?? 'dismiss'),
     () => reply(id, 'dismiss')
   )
 })
+
+// A window named as one of Grove's picker popups: the bridge says whether
+// it really is a popup window (a page can name its own window anything).
+if (window.name.startsWith('grove-helper:')) {
+  const answer = (ok) => channel.dispatchEvent(new CustomEvent(HELPER_ANSWER, { detail: ok ? '1' : '' }))
+  try {
+    chrome.runtime.sendMessage({ groveHelperWindow: true }).then(answer, () => answer(false))
+  } catch {
+    answer(false)
+  }
+}
 
 // ---- Unsaved input ----
 // Grove unloads tabs left alone for a while, but not one whose page holds

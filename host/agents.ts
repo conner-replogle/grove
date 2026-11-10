@@ -66,6 +66,10 @@ Pages have the user's own logins (cookies, accounts). Ask the user before doing 
 
 Start with open_tab. Use snapshot to read a page: it lists the page's elements as an accessibility tree, each with a ref (e12) that click, type, hover, select_option and scroll take. Refs last until the page changes; take a new snapshot after navigating. Use screenshot when the layout or images matter.`
 
+const AGENTS_OFF = "The user has turned off agents in Grove's settings (Settings: Agents)."
+const SCRIPTS_OFF =
+  'Running your own JavaScript is off in Grove\'s settings. Use snapshot, click, type and the other tools instead, or ask the user to turn on "Let agents run scripts" in Settings: Agents.'
+
 const tabArg = { tab: { type: 'string', description: 'Your tab (t1, t2, ...). Default: the current one.' } }
 const refArg = { ref: { type: 'string', description: "The element's ref from the last snapshot (e12)." } }
 const TOOLS = [
@@ -189,9 +193,19 @@ export class AgentServer {
   private readonly bridge: Bridge
   private readonly version: string
   private readonly log: (...a: unknown[]) => void
+  private readonly allowed: () => { agents: boolean; agentScripts: boolean }
 
-  constructor(opts: { cdp: Cdp; host: GroveHost; bridge: Bridge; version: string; log: (...a: unknown[]) => void }) {
+  constructor(opts: {
+    cdp: Cdp
+    host: GroveHost
+    bridge: Bridge
+    version: string
+    log: (...a: unknown[]) => void
+    // The user's settings for agents (Settings: Agents).
+    allowed: () => { agents: boolean; agentScripts: boolean }
+  }) {
     this.cdp = opts.cdp
+    this.allowed = opts.allowed
     this.host = opts.host
     this.bridge = opts.bridge
     this.version = opts.version
@@ -311,8 +325,9 @@ export class AgentServer {
       case 'ping':
         return {}
       case 'tools/list':
-        return { tools: TOOLS }
+        return { tools: this.allowed().agentScripts ? TOOLS : TOOLS.filter((t) => t.name !== 'evaluate') }
       case 'tools/call':
+        if (!this.allowed().agents) throw new Error(AGENTS_OFF)
         return this.call(agent, msg.params?.name, msg.params?.arguments ?? {})
       default:
         if (msg.id === undefined) return undefined // a notification
@@ -443,7 +458,7 @@ export class AgentServer {
   private async run(agent: Agent, name: string, a: Args): Promise<ToolResult | string> {
     switch (name) {
       case 'open_tab': {
-        const entryId = await this.host.agentOpen(a.url || 'about:blank')
+        const entryId = await this.host.agentOpen(a.url ? webUrl(String(a.url)) : 'about:blank')
         const t = this.addTab(agent, entryId)
         agent.current = t.id
         await this.session(t)
@@ -484,7 +499,7 @@ export class AgentServer {
             if (!entry) throw new Error(`There is no page to go ${url} to.`)
             await this.send(t, 'Page.navigateToHistoryEntry', { entryId: entry.id })
           } else {
-            const r = await this.send(t, 'Page.navigate', { url: withScheme(url) })
+            const r = await this.send(t, 'Page.navigate', { url: webUrl(url) })
             if (r.errorText) throw new Error(`Couldn't load ${url}: ${r.errorText}`)
           }
           await this.settle(t, 300)
@@ -622,6 +637,7 @@ export class AgentServer {
         })
       }
       case 'evaluate': {
+        if (!this.allowed().agentScripts) throw new Error(SCRIPTS_OFF)
         const t = this.tab(agent, a.tab)
         return this.guard(t, async () => {
           const value = await this.evaluate(t, String(a.expression))
@@ -784,9 +800,25 @@ function area(q: number[]): number {
   return Math.abs(a) / 2
 }
 
-function withScheme(url: string): string {
-  if (url.includes('://') || /^(about|data|javascript|chrome|file|blob|view-source):/i.test(url)) return url
-  return /^(localhost|127\.|\[::1\])/.test(url) ? `http://${url}` : `https://${url}`
+// A web address to open for an agent: http and https pages only (and a
+// blank page). Not files, Chrome's own pages (settings, saved passwords),
+// or javascript:, data: and the like, which reach beyond the web pages the
+// user's logins are for.
+export function webUrl(url: string): string {
+  const u = url.trim()
+  if (u === 'about:blank') return u
+  // "localhost:3000" and "example.com:8080/x" are host:port, not a scheme.
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(u) && !/^[\w.-]+:\d+(\/|$)/.test(u)
+  const full = hasScheme ? u : /^(localhost|127\.|\[::1\])/.test(u) ? `http://${u}` : `https://${u}`
+  let parsed: URL
+  try {
+    parsed = new URL(full)
+  } catch {
+    throw new Error(`${url} isn't a web address.`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    throw new Error(`Agents can only open web pages (http and https), not ${parsed.protocol} addresses.`)
+  return parsed.href
 }
 
 function timed<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
