@@ -45,14 +45,53 @@ newer() {
 }
 
 mkdir -p "$data"
-if [ ! -f "$data/app/launcher/grove.mjs" ] || newer "$(version "$res/app")" "$(version "$data/app")"; then
+# The bundle's app replaces the user's copy when there is none, when it's
+# newer (unless it's the version the rollback below gave up on), or when an
+# installer asked for it (use-bundle-app: a reinstall, or an older release).
+bundle_app="$res/app"
+use_bundle=false
+if [ -f "$data/use-bundle-app" ] || [ ! -f "$data/app/launcher/grove.mjs" ]; then
+  use_bundle=true
+  rm -f "$data/skip-version"
+elif [ "$(version "$bundle_app")" != "$(cat "$data/skip-version" 2>/dev/null || true)" ] &&
+  newer "$(version "$bundle_app")" "$(version "$data/app")"; then
+  use_bundle=true
+fi
+if $use_bundle; then
   rm -rf "$data/app.new"
-  cp -R "$res/app" "$data/app.new"
-  echo "bundle $(version "$res/app")" > "$data/app.new/.installed"
+  cp -R "$bundle_app" "$data/app.new"
+  echo "bundle $(version "$bundle_app")" > "$data/app.new/.installed"
   rm -rf "$data/app.old"
   [ -d "$data/app" ] && mv "$data/app" "$data/app.old"
   mv "$data/app.new" "$data/app"
+  rm -f "$data/use-bundle-app"
 fi
+
+log="$HOME/Library/Logs/Grove/grove.log"
+mkdir -p "$(dirname "$log")"
+
+# An app that hasn't come up yet (the launcher writes .healthy once a
+# window's UI is up) gets two starts. After that the app before it goes
+# back, and its version is skipped (host/updates.ts doesn't offer it
+# again). A start while Grove runs only hands it a link: not counted.
+case "${1:-}" in sync | mcp) ;; *)
+  if [ ! -f "$data/app/.healthy" ] && [ -f "$data/app.old/launcher/grove.mjs" ] &&
+    ! pgrep -f "$contents/MacOS/Chromium " >/dev/null 2>&1; then
+    starts="$(cat "$data/app/.starts" 2>/dev/null || echo 0)"
+    if [ "$starts" -ge 2 ]; then
+      bad="$(version "$data/app")"
+      echo "$bad" > "$data/skip-version"
+      rm -rf "$data/app.bad"
+      mv "$data/app" "$data/app.bad" && mv "$data/app.old" "$data/app"
+      # It ran before the update.
+      date -u +%FT%TZ > "$data/app/.healthy"
+      echo "$(date -u +%FT%TZ) Grove $bad didn't start twice: back to $(version "$data/app")" >>"$log"
+    else
+      echo $((starts + 1)) > "$data/app/.starts"
+    fi
+  fi
+  ;;
+esac
 
 export GROVE_CHROME="${GROVE_CHROME:-$contents/MacOS/Chromium}"
 export GROVE_BUNDLE="$bundle"
@@ -60,6 +99,4 @@ export GROVE_RELAUNCH="$self"
 
 # sync and mcp talk on stdio.
 case "${1:-}" in sync | mcp) exec "$node" "$data/app/launcher/grove.mjs" "$@" ;; esac
-log="$HOME/Library/Logs/Grove/grove.log"
-mkdir -p "$(dirname "$log")"
 exec "$node" "$data/app/launcher/grove.mjs" "$@" >>"$log" 2>&1

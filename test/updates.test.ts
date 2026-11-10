@@ -1,11 +1,15 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { assetName, bundleAssetName, compareVersions, pinsAssetName, Updater } from '../host/updates.ts'
+
+// The tests' own release key.
+const keys = generateKeyPairSync('ed25519')
+const KEY = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64')
 
 describe('compareVersions', () => {
   it('compares numerically, ignoring v and suffixes', () => {
@@ -36,6 +40,12 @@ describe('Updater', () => {
   const sums = (names: string[]) =>
     Buffer.from(names.map((n) => `${sha(files.get(`/${n}`)!)}  ${n}`).join('\n') + '\n')
   const asset = (name: string) => ({ name, url: `${api}/${name}`, browser_download_url: '' })
+  // SHA256SUMS over these files, signed with the tests' key.
+  const signSums = (names: string[]) => {
+    const text = sums(names)
+    files.set('/SHA256SUMS', text)
+    files.set('/SHA256SUMS.sig', Buffer.from(sign(null, text, keys.privateKey).toString('base64')))
+  }
 
   const app = (version: string, installed = true): string => {
     const d = join(dir, 'grove-ui')
@@ -74,12 +84,12 @@ describe('Updater', () => {
     const port = (server.address() as { port: number }).port
     api = `http://127.0.0.1:${port}`
     files = new Map([[`/${assetName('0.2.0')}`, tarball]])
-    files.set('/SHA256SUMS', sums([assetName('0.2.0')]))
+    signSums([assetName('0.2.0')])
     release = {
       tag_name: 'v0.2.0',
       body: 'notes',
       html_url: 'https://example/r',
-      assets: [asset(assetName('0.2.0')), asset('SHA256SUMS')]
+      assets: [asset(assetName('0.2.0')), asset('SHA256SUMS'), asset('SHA256SUMS.sig')]
     }
     process.env.GROVE_GITHUB_TOKEN = 'test'
   })
@@ -92,7 +102,7 @@ describe('Updater', () => {
 
   it('offers a newer release and installs it over the app', async () => {
     const appDir = app('0.1.0')
-    const u = new Updater({ appDir, repo: 'o/r', api, onChange: () => {} })
+    const u = new Updater({ appDir, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
     await u.check()
     expect(u.status()).toMatchObject({ state: 'available', version: '0.2.0', current: '0.1.0', installed: true })
     await u.install()
@@ -103,7 +113,7 @@ describe('Updater', () => {
   })
 
   it('stays quiet when up to date or there are no releases', async () => {
-    const u = new Updater({ appDir: app('0.2.0'), repo: 'o/r', api, onChange: () => {} })
+    const u = new Updater({ appDir: app('0.2.0'), repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
     await u.check()
     expect(u.status().state).toBe('none')
     release = undefined
@@ -112,13 +122,13 @@ describe('Updater', () => {
   })
 
   it("doesn't install over a checkout, and reports a release without its tarball", async () => {
-    const checkout = new Updater({ appDir: app('0.1.0', false), repo: 'o/r', api, onChange: () => {} })
+    const checkout = new Updater({ appDir: app('0.1.0', false), repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
     await checkout.check()
     await checkout.install()
     expect(checkout.status()).toMatchObject({ state: 'available', installed: false })
     rmSync(join(dir, 'grove-ui'), { recursive: true })
     release = { ...release, assets: [] }
-    const u = new Updater({ appDir: app('0.1.0'), repo: 'o/r', api, onChange: () => {} })
+    const u = new Updater({ appDir: app('0.1.0'), repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
     await u.check()
     await u.install()
     expect(u.status().state).toBe('error')
@@ -126,7 +136,7 @@ describe('Updater', () => {
   })
 
   it('says when it last looked, and why it couldn’t', async () => {
-    const u = new Updater({ appDir: app('0.2.0'), repo: 'o/r', api, onChange: () => {} })
+    const u = new Updater({ appDir: app('0.2.0'), repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
     expect(u.status().checkedAt).toBeUndefined()
     await u.check()
     expect(u.status()).toMatchObject({ state: 'none', checkError: undefined })
@@ -140,19 +150,43 @@ describe('Updater', () => {
   it('refuses a download that differs from SHA256SUMS', async () => {
     files.set(`/${assetName('0.2.0')}`, Buffer.from('tampered'))
     const appDir = app('0.1.0')
-    const u = new Updater({ appDir, repo: 'o/r', api, onChange: () => {} })
+    const u = new Updater({ appDir, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
     await u.check()
     await u.install()
     expect(u.status()).toMatchObject({ state: 'error', error: expect.stringContaining('SHA256SUMS') })
     expect(readFileSync(join(appDir, 'launcher/grove.mjs'), 'utf8')).toBe('// 0.1.0')
   })
 
+  it("refuses a release that isn't signed, or signed with another key", async () => {
+    const appDir = app('0.1.0')
+    release = { ...release, assets: (release!.assets as { name: string }[]).filter((a) => a.name !== 'SHA256SUMS.sig') }
+    const unsigned = new Updater({ appDir, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
+    await unsigned.check()
+    await unsigned.install()
+    expect(unsigned.status()).toMatchObject({ state: 'error', error: expect.stringContaining("isn't signed") })
+    release = { ...release, assets: [...(release!.assets as object[]), asset('SHA256SUMS.sig')] }
+    const other = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64')
+    const forged = new Updater({ appDir, repo: 'o/r', api, releaseKey: other, onChange: () => {} })
+    await forged.check()
+    await forged.install()
+    expect(forged.status()).toMatchObject({ state: 'error', error: expect.stringContaining('signature') })
+    expect(readFileSync(join(appDir, 'launcher/grove.mjs'), 'utf8')).toBe('// 0.1.0')
+  })
+
+  it("doesn't offer a version the start script rolled back from", async () => {
+    const appDir = app('0.1.0')
+    writeFileSync(join(dir, 'skip-version'), '0.2.0\n')
+    const u = new Updater({ appDir, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
+    await u.check()
+    expect(u.status().state).toBe('none')
+  })
+
   describe('with an installed bundle', () => {
     const PLATFORM = 'linux-x64'
-    const bundle = (chromium: string) => {
+    const bundle = (chromium: string, packaging?: Record<string, string>) => {
       const b = join(dir, 'opt/grove')
       mkdirSync(b, { recursive: true })
-      writeFileSync(join(b, 'bundle.json'), JSON.stringify({ version: '0.1.0', chromium, node: '26.0.0', platform: PLATFORM }))
+      writeFileSync(join(b, 'bundle.json'), JSON.stringify({ version: '0.1.0', chromium, node: '26.0.0', platform: PLATFORM, packaging }))
       return b
     }
     // Release 0.2.0 pins Chromium 155 and carries a whole bundle.
@@ -162,17 +196,17 @@ describe('Updater', () => {
       writeFileSync(join(top, 'bundle.json'), JSON.stringify({ version: '0.2.0', chromium: '155', node: '26.0.0', platform: PLATFORM }))
       execFileSync('tar', ['-cJf', join(dir, 'b.txz'), '-C', join(dir, 'newbundle'), 'grove'])
       const names = [assetName('0.2.0'), pinsAssetName('0.2.0'), bundleAssetName('0.2.0', PLATFORM)]
-      files.set(`/${names[1]}`, Buffer.from(JSON.stringify({ version: '0.2.0', chromium: '155', node: '26.0.0' })))
+      files.set(`/${names[1]}`, Buffer.from(JSON.stringify({ version: '0.2.0', chromium: '155', node: '26.0.0', packaging: { linux: 'b' } })))
       files.set(`/${names[2]}`, readFileSync(join(dir, 'b.txz')))
-      files.set('/SHA256SUMS', sums(names))
-      release = { ...release, assets: [...names, 'SHA256SUMS'].map(asset) }
+      signSums(names)
+      release = { ...release, assets: [...names, 'SHA256SUMS', 'SHA256SUMS.sig'].map(asset) }
     }
 
     it('stages a whole new bundle when the release pins another Chromium', async () => {
       withPins()
       const appDir = app('0.1.0')
       const b = bundle('154')
-      const u = new Updater({ appDir, bundleDir: b, platform: PLATFORM, repo: 'o/r', api, onChange: () => {} })
+      const u = new Updater({ appDir, bundleDir: b, platform: PLATFORM, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
       await u.check()
       await u.install()
       expect(u.status().state).toBe('ready')
@@ -182,11 +216,42 @@ describe('Updater', () => {
       expect(JSON.parse(readFileSync(join(b, 'bundle.json'), 'utf8')).chromium).toBe('154')
     })
 
-    it('updates just the app when the pins are the same', async () => {
+    it('stages a whole new bundle when the start script changed, or the bundle predates fingerprints', async () => {
+      for (const packaging of [{ linux: 'a' }, undefined]) {
+        withPins()
+        const appDir = app('0.1.0')
+        const b = bundle('155', packaging)
+        const u = new Updater({ appDir, bundleDir: b, platform: PLATFORM, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
+        await u.check()
+        await u.install()
+        expect(u.status().state).toBe('ready')
+        expect(existsSync(join(`${b}.new`, 'bundle.json'))).toBe(true)
+        rmSync(`${b}.new`, { recursive: true })
+      }
+    })
+
+    it("offers the release it runs when the bundle's start script is older", async () => {
+      withPins()
+      const appDir = app('0.2.0')
+      const b = bundle('155', { linux: 'a' })
+      const u = new Updater({ appDir, bundleDir: b, platform: PLATFORM, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
+      await u.check()
+      expect(u.status()).toMatchObject({ state: 'available', version: '0.2.0' })
+      await u.install()
+      expect(u.status().state).toBe('ready')
+      expect(existsSync(join(`${b}.new`, 'bundle.json'))).toBe(true)
+      // Up to date once it has that bundle.
+      rmSync(`${b}.new`, { recursive: true })
+      const current = new Updater({ appDir, bundleDir: bundle('155', { linux: 'b' }), platform: PLATFORM, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
+      await current.check()
+      expect(current.status().state).toBe('none')
+    })
+
+    it('updates just the app when the pins and start script are the same', async () => {
       withPins()
       const appDir = app('0.1.0')
-      const b = bundle('155')
-      const u = new Updater({ appDir, bundleDir: b, platform: PLATFORM, repo: 'o/r', api, onChange: () => {} })
+      const b = bundle('155', { linux: 'b', macos: 'x' })
+      const u = new Updater({ appDir, bundleDir: b, platform: PLATFORM, repo: 'o/r', api, releaseKey: KEY, onChange: () => {} })
       await u.check()
       await u.install()
       expect(u.status().state).toBe('ready')

@@ -24,8 +24,13 @@ bundle="$(dirname "$(readlink -f "$bin" 2>/dev/null || echo "$bin")")"
 if [ -f "$bundle/bundle.json" ]; then
   app="${XDG_DATA_HOME:-$HOME/.local/share}/grove/app"
   mkdir -p "$app"
-  # (Its .installed says which release or bundle it came from.)
-  rsync -a --delete --exclude .installed launcher host shared extension dist package.json "$app/"
+  rsync -a --delete --exclude .installed --exclude .healthy --exclude .starts \
+    launcher host shared extension dist package.json "$app/"
+  # A checkout's copy: the launcher hot-reloads its UI, and the start
+  # script never rolls it back (that's for releases that don't start).
+  echo "checkout $(pwd) $(git rev-parse --short HEAD 2>/dev/null || true)" > "$app/.installed"
+  date -u +%FT%TZ > "$app/.healthy"
+  rm -f "$app/.starts"
   echo "installed into the release install: $app"
   echo "restart Grove for host and extension changes (the UI reloads itself)"
   exit 0

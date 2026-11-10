@@ -28,30 +28,30 @@
     }
   },
   "node": {
-    "version": "26.8.2",
+    "version": "26.13.0",
     "linux-x64": {
-      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-linux-x64.tar.xz",
-      "sha256": "40e1d3225c1c9ae9a2671c98ecb9857e4d5555026394f348645676798840d5c5"
+      "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-x64.tar.xz",
+      "sha256": "d28a96af6c38596f6d9d97c0ee531c13d238d757742387d1928de822d959e997"
     },
     "linux-arm64": {
-      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-linux-arm64.tar.xz",
-      "sha256": "81d8f0fdea9dcd3bfdcfeafc5f8359c151f097e9880b0007c0645ca670d07971"
+      "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-arm64.tar.xz",
+      "sha256": "406fe3fbde1c054adff8b297c16fdb5af6659db327c1ac8acd46b56ef1af9a92"
     },
     "macos-arm64": {
-      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-darwin-arm64.tar.xz",
-      "sha256": "f58e5044b938a3174184de4aaf1d2bbfcfff812e88220ff08e9221c09f5c8677"
+      "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-darwin-arm64.tar.xz",
+      "sha256": "6f5b3187d9df9fc007e881167905bc7d69ad26450ddc377c83d63256a2495b6e"
     },
     "macos-x64": {
-      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-darwin-x64.tar.xz",
-      "sha256": "49950999366bf6cd47c8c8fd3593aa82fb5efed494937b380b85677338285ca0"
+      "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-darwin-x64.tar.xz",
+      "sha256": "8bd636bc981a92e1ab930c02340eece2076eb1aaf94d14e421cdeeddc1292298"
     },
     "windows-x64": {
-      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-win-x64.zip",
-      "sha256": "cf02f5d0c06c794b84f277177d5cf3743d0924ca49f6641cd435dd7cb6ee9085"
+      "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-win-x64.zip",
+      "sha256": "dcc60d59a0746999f99064a01c020445d54d84228c691cdbf25b49ac3b59150a"
     },
     "windows-arm64": {
-      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-win-arm64.zip",
-      "sha256": "a4e8362e268f1fcf1735f046e0adb088b28eeb400fb1c33fe5cc94d1a3d42570"
+      "url": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-win-arm64.zip",
+      "sha256": "a9427139595156ef484e1fb08957676e09d4232368dd1743a2a9f93f3d241b14"
     }
   }
 }

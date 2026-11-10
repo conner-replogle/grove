@@ -56,12 +56,11 @@ else
   say "Downloading Grove $version for $platform…"
   bundle="$work/$name"
   fetch "$base/$name" "$bundle" || die "no $name in release v$version"
-  if fetch "$base/SHA256SUMS" "$work/SHA256SUMS" 2>/dev/null; then
-    want="$(grep " $name\$" "$work/SHA256SUMS" | cut -d' ' -f1)"
-    if command -v sha256sum >/dev/null; then got="$(sha256sum "$bundle" | cut -d' ' -f1)"
-    else got="$(shasum -a 256 "$bundle" | cut -d' ' -f1)"; fi
-    [ -n "$want" ] && [ "$want" = "$got" ] || die "$name doesn't match the release's SHA256SUMS"
-  fi
+  fetch "$base/SHA256SUMS" "$work/SHA256SUMS" || die "no SHA256SUMS in release v$version"
+  want="$(grep " $name\$" "$work/SHA256SUMS" | cut -d' ' -f1)"
+  if command -v sha256sum >/dev/null; then got="$(sha256sum "$bundle" | cut -d' ' -f1)"
+  else got="$(shasum -a 256 "$bundle" | cut -d' ' -f1)"; fi
+  [ -n "$want" ] && [ "$want" = "$got" ] || die "$name doesn't match the release's SHA256SUMS"
 fi
 
 say "Unpacking…"
@@ -89,12 +88,20 @@ link_command() {
   ln -sf "$1" "$bin"
 }
 
+# Asks the start script to run this bundle's app at the next start, even
+# if the copy there is newer: installing an older release goes back to it.
+use_bundle_app() {
+  mkdir -p "$1"
+  : >"$1/use-bundle-app"
+}
+
 if [ "$os" = linux ]; then
   [ -x "$work/unpacked/grove/grove" ] || die "that isn't a Linux Grove bundle"
   dest="${GROVE_INSTALL_DIR:-$HOME/.local/opt/grove}"
   swap "$work/unpacked/grove" "$dest"
 
   link_command "$dest/grove"
+  use_bundle_app "${XDG_DATA_HOME:-$HOME/.local/share}/grove"
 
   share="${XDG_DATA_HOME:-$HOME/.local/share}"
   for png in "$dest"/icons/grove-*.png; do
@@ -144,5 +151,6 @@ else
   xattr -cr "$work/unpacked/Grove.app" 2>/dev/null || true
   swap "$work/unpacked/Grove.app" "$dest"
   link_command "$dest/Contents/MacOS/Grove"
+  use_bundle_app "$HOME/Library/Application Support/Grove"
   say "Installed $dest. Open it from Launchpad or Spotlight."
 fi

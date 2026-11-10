@@ -578,9 +578,38 @@ if (process.platform === 'linux' || win) {
   new Widevine({ profile: PROFILE, chromeVersion: () => chromeVersion, log: (...a) => console.log('[grove]', ...a) }).start()
 }
 
+// The app this launcher runs from, and how it got there: .installed says
+// "release <v>" or "bundle <v>" for a copy the updater or a start script
+// put there, "checkout ..." for install.sh's. None: a checkout run in place.
+const APP_DIR = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '')
+const installedFrom = (() => {
+  try {
+    return readFileSync(join(APP_DIR, '.installed'), 'utf8').trim()
+  } catch {
+    return ''
+  }
+})()
+
+// Tells the start script this app works (it rolls back an app that never
+// says so; see host/updates.ts): once a window's UI is up and the host has
+// Chrome's tabs.
+let uiUp = false
+let hostUp = false
+function markHealthy() {
+  if (!uiUp || !hostUp || !installedFrom) return
+  const marker = join(APP_DIR, '.healthy')
+  if (existsSync(marker)) return
+  try {
+    writeFileSync(marker, `${new Date().toISOString()}\n`)
+    rmSync(join(APP_DIR, '.starts'), { force: true })
+  } catch (e) {
+    log('healthy marker:', e.message)
+  }
+}
+
 // Newer releases (host/updates.ts), offered in the windows.
 const updater = new Updater({
-  appDir: fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, ''),
+  appDir: APP_DIR,
   bundleDir: process.env.GROVE_BUNDLE,
   onChange: () => host.refresh(),
   log: (...a) => console.log('[grove]', ...a)
@@ -683,6 +712,8 @@ async function attachUi(sessionId, targetInfo, waiting) {
   // The UI's own hello may have come before its window was known; this one
   // tells the host the window's UI is up.
   await host.command(windowId, { type: 'hello' })
+  uiUp = true
+  markHealthy()
 }
 
 // ---- The bridge extension ----
@@ -717,6 +748,8 @@ async function attachBridge(sessionId, waiting) {
     hostAttached = true
     await protectedPrefsSet
     await host.attach(bridge)
+    hostUp = true
+    markHealthy()
     sync.start().catch((e) => console.log('[grove] sync:', e.message))
     // Local agents (grove mcp), once there are windows for their tabs.
     new AgentServer({
@@ -878,10 +911,12 @@ async function reloadUi() {
   log('reloaded', uiSessions.size, 'window(s)')
 }
 
-// An installed Grove picks up a new UI bundle (install.sh) without a
-// restart. The host, launcher and extension still need one. (install.sh
-// replaces the file, so the directory is watched.)
-if (!dev) {
+// A Grove installed from a checkout (install.sh) picks up a new UI bundle
+// without a restart. The host, launcher and extension still need one.
+// (install.sh replaces the file, so the directory is watched.) Not a
+// release's copy: nothing rewrites its dist/ in place, and on Windows a
+// watch inside the app's directory stops the updater renaming it.
+if (!dev && installedFrom.startsWith('checkout')) {
   let timer
   watch(dirname(BUNDLE), (_event, name) => {
     if (name !== basename(BUNDLE)) return

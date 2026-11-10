@@ -1,4 +1,6 @@
-# Typechecks and tests every push and pull request.
+# Typechecks and tests every push and pull request, and checks what only
+# releases build (the start scripts, Grove.exe, the bundle scripts), so a
+# mistake there shows up before a release, not in the middle of one.
 name: CI
 
 on:
@@ -7,12 +9,17 @@ on:
     tags-ignore: ['v*']
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit
       - run: pnpm exec vitest run
@@ -20,3 +27,29 @@ jobs:
       - name: Sync server
         working-directory: sync-worker
         run: pnpm install --frozen-lockfile && pnpm exec tsc --noEmit
+
+  packaging:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: stable
+          cache: false
+      - name: Start scripts and installers
+        run: |
+          sudo apt-get install -y --no-install-recommends shellcheck >/dev/null
+          shellcheck -S warning packaging/linux/grove packaging/macos/Grove packaging/install.sh install.sh scripts/release.sh
+      - name: Grove.exe
+        working-directory: packaging/windows
+        env:
+          GOOS: windows
+          CGO_ENABLED: '0'
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet .
+          go build -o /dev/null .
+      - name: Bundle scripts
+        run: for f in scripts/*.mjs launcher/*.mjs; do node --check "$f"; done

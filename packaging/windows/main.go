@@ -71,18 +71,25 @@ func main() {
 		}
 	}
 
+	// The bundle's app replaces the user's copy when there is none, when
+	// it's newer (unless it's the version the rollback below gave up on), or
+	// when an installer asked for it (use-bundle-app: a reinstall, or an
+	// older release).
 	app := filepath.Join(data, "app")
-	if !exists(filepath.Join(app, "launcher", "grove.mjs")) || newer(version(filepath.Join(bundle, "app")), version(app)) {
-		if err := installApp(filepath.Join(bundle, "app"), app); err != nil && !exists(filepath.Join(app, "launcher", "grove.mjs")) {
+	bundleApp := filepath.Join(bundle, "app")
+	skipFile := filepath.Join(data, "skip-version")
+	useBundleFile := filepath.Join(data, "use-bundle-app")
+	asked := exists(useBundleFile) || !exists(filepath.Join(app, "launcher", "grove.mjs"))
+	if asked {
+		os.Remove(skipFile)
+	}
+	if asked || (version(bundleApp) != readTrimmed(skipFile) && newer(version(bundleApp), version(app))) {
+		if err := installApp(bundleApp, app); err != nil && !exists(filepath.Join(app, "launcher", "grove.mjs")) {
 			fail(err)
+		} else if err == nil {
+			os.Remove(useBundleFile)
 		}
 	}
-
-	env := os.Environ()
-	if os.Getenv("GROVE_CHROME") == "" {
-		env = append(env, "GROVE_CHROME="+filepath.Join(bundle, "chromium", "chrome.exe"))
-	}
-	env = append(env, "GROVE_BUNDLE="+bundle, "GROVE_RELAUNCH="+self, "GROVE_NO_SWAP=")
 
 	logPath := filepath.Join(data, "grove.log")
 	if st, err := os.Stat(logPath); err == nil && st.Size() > 8<<20 {
@@ -92,6 +99,38 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+
+	// An app that hasn't come up yet (the launcher writes .healthy once a
+	// window's UI is up) gets two starts. After that the app before it goes
+	// back, and its version is skipped (host/updates.ts doesn't offer it
+	// again). A start while Grove runs only hands it a link: not counted.
+	if !exists(filepath.Join(app, ".healthy")) && exists(filepath.Join(app+".old", "launcher", "grove.mjs")) && !running(data) {
+		startsFile := filepath.Join(app, ".starts")
+		starts, _ := strconv.Atoi(readTrimmed(startsFile))
+		if starts >= 2 {
+			bad := version(app)
+			os.WriteFile(skipFile, []byte(bad+"\n"), 0o644)
+			os.RemoveAll(app + ".bad")
+			if os.Rename(app, app+".bad") == nil {
+				if os.Rename(app+".old", app) == nil {
+					// It ran before the update.
+					os.WriteFile(filepath.Join(app, ".healthy"), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
+					fmt.Fprintf(logFile, "%s Grove %s didn't start twice: back to %s\n", time.Now().UTC().Format(time.RFC3339), bad, version(app))
+				} else {
+					os.Rename(app+".bad", app)
+				}
+			}
+		} else {
+			os.WriteFile(startsFile, []byte(strconv.Itoa(starts+1)+"\n"), 0o644)
+		}
+	}
+
+	env := os.Environ()
+	if os.Getenv("GROVE_CHROME") == "" {
+		env = append(env, "GROVE_CHROME="+filepath.Join(bundle, "chromium", "chrome.exe"))
+	}
+	env = append(env, "GROVE_BUNDLE="+bundle, "GROVE_RELAUNCH="+self, "GROVE_NO_SWAP=")
+
 	node := filepath.Join(bundle, "node", "node.exe")
 	cmd := exec.Command(node, append([]string{filepath.Join(app, "launcher", "grove.mjs")}, args...)...)
 	cmd.Dir = data
@@ -191,6 +230,15 @@ func newer(a, b string) bool {
 		}
 	}
 	return false
+}
+
+// A small file's text, without surrounding space ("" if there's none).
+func readTrimmed(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func exists(path string) bool {

@@ -1,9 +1,15 @@
 # Builds and publishes a Grove release when scripts/release.sh pushes a
 # v* tag: the UI tarball (what most updates download), a bundle per
 # platform (scripts/bundle.mjs; what the installers and full updates
-# download), the macOS DMGs, install.sh, install.ps1 and SHA256SUMS over
-# all of them.
-# The release is published only once every platform has built.
+# download), the macOS DMGs, install.sh, install.ps1, SHA256SUMS over all
+# of them and its signature (SHA256SUMS.sig, which the updater checks).
+#
+# Nothing is published until every platform has built and the Linux bundle
+# has started and come up (scripts/smoke.mjs). Only the publish job can
+# write to the repository, and only it sees the release key.
+#
+# Third-party actions are pinned to commits (the tags they had then are in
+# the comments): a moved tag can't change what runs here.
 name: Release
 
 on:
@@ -11,14 +17,16 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit
       - run: pnpm exec vitest run
@@ -31,7 +39,14 @@ jobs:
           tar -czf "release/grove-ui-$version.tar.gz" launcher host shared extension dist package.json
       - run: node scripts/bundle.mjs linux-x64
       - run: node scripts/bundle.mjs linux-arm64
-      - uses: actions/upload-artifact@v5
+      - name: Smoke test (the x64 bundle starts and its UI comes up)
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb >/dev/null
+          # Ubuntu 24.04 keeps unprivileged user namespaces from Chromium's
+          # sandbox; let it have them, as a desktop does.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run -a node scripts/smoke.mjs "release/grove-${GITHUB_REF_NAME#v}-linux-x64.tar.xz"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: linux
           path: release/*
@@ -39,12 +54,14 @@ jobs:
   macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
       - run: pnpm install --frozen-lockfile
       - run: node scripts/bundle.mjs macos-arm64
       - run: node scripts/bundle.mjs macos-x64
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: macos
           path: release/*
@@ -53,16 +70,18 @@ jobs:
   windows:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v3
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: stable
           cache: false
       - run: pnpm install --frozen-lockfile
       - run: node scripts/bundle.mjs windows-x64
       - run: node scripts/bundle.mjs windows-arm64
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: windows
           path: release/*
@@ -70,22 +89,39 @@ jobs:
   publish:
     needs: [linux, macos, windows]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v5
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           path: release
           merge-multiple: true
+      - name: Sign
+        env:
+          GROVE_RELEASE_KEY: ${{ secrets.GROVE_RELEASE_KEY }}
+        run: |
+          test -n "$GROVE_RELEASE_KEY" || { echo "the GROVE_RELEASE_KEY secret isn't set" >&2; exit 1; }
+          cp packaging/install.sh packaging/windows/install.ps1 release/
+          (cd release && sha256sum -- * > SHA256SUMS)
+          node scripts/sign.mjs release/SHA256SUMS
+      - name: Release notes (the commits since the last release)
+        run: |
+          previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          {
+            echo "## What's new"
+            echo
+            git log --no-merges --format='- %s' ${previous:+"$previous..$GITHUB_REF_NAME"} |
+              grep -v '^- Release v' | cut -c1-400
+          } > notes.md
+          cat notes.md
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp packaging/install.sh packaging/windows/install.ps1 release/
           cd release
-          sha256sum -- * > SHA256SUMS
-          previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
           # Options before the files: after "--" everything is a file.
-          gh release create "$GITHUB_REF_NAME" --title "Grove ${GITHUB_REF_NAME#v}" --generate-notes \
-            ${previous:+--notes-start-tag "$previous"} -- *
+          gh release create "$GITHUB_REF_NAME" --title "Grove ${GITHUB_REF_NAME#v}" --notes-file ../notes.md -- *

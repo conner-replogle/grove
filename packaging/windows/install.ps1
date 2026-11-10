@@ -67,6 +67,12 @@
       Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$dest.old"
     }
 
+    # Grove.exe runs this bundle's app at the next start, even if the copy
+    # there is newer: installing an older release goes back to it.
+    $data = Join-Path $env:LOCALAPPDATA 'Grove'
+    New-Item -ItemType Directory -Force $data | Out-Null
+    Set-Content -LiteralPath (Join-Path $data 'use-bundle-app') -Value ''
+
     $exe = Join-Path $dest 'Grove.exe'
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Grove.lnk'))

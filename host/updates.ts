@@ -12,22 +12,40 @@
 // update for an installed bundle (GROVE_BUNDLE): the whole bundle for this
 // platform is unpacked beside it as <bundle>.new, and the start script
 // swaps it in at the next start, once nothing runs from the old one.
-// Every download is checked against the release's SHA256SUMS.
+// Every download is checked against the release's SHA256SUMS, and
+// SHA256SUMS against its signature (SHA256SUMS.sig, made by the Release
+// workflow with Grove's release key): a release anyone else published, or
+// changed, isn't installed.
 //
-// The repository is public, so no token is needed; GROVE_GITHUB_TOKEN or
-// GITHUB_TOKEN, if set, is sent (a higher rate limit, or a private fork).
+// A bundle also records a fingerprint of its start script (bundle.json's
+// `packaging`, by platform family): a release with another one is a full
+// update too, so changes to the start scripts reach installed copies.
+//
+// The start scripts roll back an app that doesn't come up (no .healthy,
+// which the launcher writes once a window's UI is up, after two starts):
+// the previous app goes back, and its version goes in <data>/skip-version,
+// which the updater then doesn't offer again.
+//
+// The repository is public, so no token is needed; GROVE_GITHUB_TOKEN, if
+// set, is sent (a higher rate limit, or a private fork).
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey, verify } from 'node:crypto'
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { Readable } from 'node:stream'
+import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import type { UpdateStatus } from '../shared/protocol.ts'
 
 const run = promisify(execFile)
 const HOUR = 3_600_000
+// A download that sends nothing for this long is given up.
+const STALL_MS = 60_000
+
+// Grove's release key (ed25519, SPKI, base64): the Release workflow signs
+// each release's SHA256SUMS with its private half (the GROVE_RELEASE_KEY
+// secret).
+export const RELEASE_KEY = 'MCowBQYDK2VwAyEAOUXuO/UPXUMhEBgoJcJ/cUwttRd51+EoDA8ah7qGufU='
 
 export interface UpdaterOptions {
   // The directory the launcher runs from (holds package.json).
@@ -40,6 +58,8 @@ export interface UpdaterOptions {
   api?: string
   onChange: () => void
   log?: (...a: unknown[]) => void
+  // The key releases are signed with (tests use their own).
+  releaseKey?: string
 }
 
 interface Release {
@@ -83,6 +103,21 @@ export interface BundleInfo {
   version: string
   chromium: string
   node: string
+  // Fingerprints of the start script and Chromium patches, by platform
+  // family (linux, macos, windows); bundles before 0.8 have none.
+  packaging?: Record<string, string>
+}
+
+// A platform's family, as bundle.json's `packaging` names it.
+export const familyOf = (platform: string): string => platform.split('-')[0]
+
+// A version the start script rolled back from (it didn't start), if any.
+export function skippedVersion(appDir: string): string | undefined {
+  try {
+    return readFileSync(join(dirname(appDir), 'skip-version'), 'utf8').trim() || undefined
+  } catch {
+    return undefined
+  }
 }
 
 // Where a bundle keeps bundle.json: at its top, or in Grove.app's Resources.
@@ -108,6 +143,7 @@ export class Updater {
   private readonly installed: boolean
   private readonly onChange: () => void
   private readonly log: (...a: unknown[]) => void
+  private readonly releaseKey: string
   private latest?: Release
   private state: UpdateStatus
   private timer?: ReturnType<typeof setInterval>
@@ -124,6 +160,7 @@ export class Updater {
     this.api = (process.env.GROVE_UPDATE_API ?? o.api ?? 'https://api.github.com').replace(/\/$/, '')
     this.onChange = o.onChange
     this.log = o.log ?? (() => {})
+    this.releaseKey = o.releaseKey ?? RELEASE_KEY
     this.current = readVersion(this.appDir)
     this.installed = existsSync(join(this.appDir, '.installed'))
     this.state = { state: 'none', current: this.current, installed: this.installed }
@@ -150,7 +187,23 @@ export class Updater {
     try {
       const release = await this.fetchLatest()
       this.checkError = undefined
-      if (!release || compareVersions(release.tag_name, this.current) <= 0) {
+      // Not a release this copy rolled back from (it didn't start here).
+      const skipped = skippedVersion(this.appDir)
+      const order = release ? compareVersions(release.tag_name, this.current) : -1
+      // The release this copy runs, but with a newer start script than the
+      // installed bundle has (bundles before fingerprints, or a start
+      // script fixed since): its whole bundle, so the fix gets here.
+      if (release && order === 0 && (await this.staleBundle(release))) {
+        this.latest = release
+        this.set({
+          state: 'available',
+          version: release.tag_name.replace(/^v/, ''),
+          notes: "Updates the part of Grove that starts it, which Grove's usual updates can't.",
+          url: release.html_url
+        })
+        return
+      }
+      if (!release || order <= 0 || (skipped && compareVersions(release.tag_name, skipped) === 0)) {
         if (this.state.state !== 'none') this.set({ state: 'none' })
         return
       }
@@ -180,11 +233,12 @@ export class Updater {
     if (!release || !this.installed || this.state.state === 'downloading') return
     const version = release.tag_name.replace(/^v/, '')
     this.set({ state: 'downloading' })
-    const work = join(tmpdir(), `grove-update-${process.pid}-${Date.now()}`)
+    // Beside the app (the same disk; /tmp is often a small tmpfs).
+    const work = join(dirname(this.appDir), `.update-${process.pid}-${Date.now()}`)
     try {
       mkdirSync(work, { recursive: true })
       const sums = await this.checksums(release, work)
-      if (await this.needsBundle(release, work)) await this.installBundle(release, version, sums, work)
+      if (await this.needsBundle(release, work, sums)) await this.installBundle(release, version, sums, work)
       else await this.installApp(release, version, sums, work)
       this.set({ state: 'ready' })
     } catch (e) {
@@ -195,15 +249,35 @@ export class Updater {
   }
 
   // Whether this release pins another Chromium or Node than the installed
-  // bundle has. Releases without pins, and copies without a bundle, update
-  // just the app.
-  private async needsBundle(release: Release, work: string): Promise<boolean> {
+  // bundle has, or another start script. Releases without pins, and copies
+  // without a bundle, update just the app.
+  private async needsBundle(release: Release, work: string, sums: Map<string, string>): Promise<boolean> {
     const have = this.bundleDir && readBundleInfo(this.bundleDir)
     const asset = release.assets.find((a) => a.name === pinsAssetName(release.tag_name))
     if (!have || !asset) return false
-    const file = await this.download(asset, work)
+    const file = await this.download(asset, work, sums)
     const want = JSON.parse(readFileSync(file, 'utf8')) as Partial<BundleInfo>
-    return want.chromium !== have.chromium || want.node !== have.node
+    const family = familyOf(this.platform)
+    const packaging = want.packaging?.[family]
+    return want.chromium !== have.chromium || want.node !== have.node || (!!packaging && packaging !== have.packaging?.[family])
+  }
+
+  // Whether the release's start script for this platform differs from the
+  // installed bundle's (a look at its pins, not checked yet: install()
+  // checks it against the signed SHA256SUMS before acting on it).
+  private async staleBundle(release: Release): Promise<boolean> {
+    const have = this.bundleDir && readBundleInfo(this.bundleDir)
+    const asset = release.assets.find((a) => a.name === pinsAssetName(release.tag_name))
+    if (!have || !asset || !this.installed) return false
+    try {
+      const res = await fetch(asset.url, { headers: { ...(await this.headers()), Accept: 'application/octet-stream' } })
+      if (!res.ok) return false
+      const want = (await res.json()) as Partial<BundleInfo>
+      const family = familyOf(this.platform)
+      return !!want.packaging?.[family] && want.packaging[family] !== have.packaging?.[family]
+    } catch {
+      return false
+    }
   }
 
   private async installApp(release: Release, version: string, sums: Map<string, string>, work: string): Promise<void> {
@@ -256,11 +330,18 @@ export class Updater {
     }
   }
 
-  // The release's SHA256SUMS: file name -> hash.
+  // The release's SHA256SUMS, once its signature checks out: file name ->
+  // hash.
   private async checksums(release: Release, work: string): Promise<Map<string, string>> {
     const asset = release.assets.find((a) => a.name === 'SHA256SUMS')
+    const sigAsset = release.assets.find((a) => a.name === 'SHA256SUMS.sig')
     if (!asset) throw new Error(`release ${release.tag_name} has no SHA256SUMS`)
-    const text = readFileSync(await this.download(asset, work), 'utf8')
+    if (!sigAsset) throw new Error(`release ${release.tag_name} isn't signed`)
+    const data = readFileSync(await this.download(asset, work))
+    const signature = Buffer.from(readFileSync(await this.download(sigAsset, work), 'utf8').trim(), 'base64')
+    const key = createPublicKey({ key: Buffer.from(this.releaseKey, 'base64'), format: 'der', type: 'spki' })
+    if (!verify(null, data, key, signature)) throw new Error(`release ${release.tag_name}'s signature doesn't match Grove's release key`)
+    const text = data.toString('utf8')
     return new Map(
       text
         .split('\n')
@@ -272,10 +353,33 @@ export class Updater {
 
   // Streams an asset to a file in `work`; with `sums`, it must match them.
   private async download(asset: Release['assets'][number], work: string, sums?: Map<string, string>): Promise<string> {
-    const res = await fetch(asset.url, { headers: { ...(await this.headers()), Accept: 'application/octet-stream' } })
-    if (!res.ok || !res.body) throw new Error(`download ${asset.name}: HTTP ${res.status}`)
+    // Given up once nothing has come for STALL_MS (a stuck download would
+    // otherwise hold the update at "downloading" until a restart).
+    const abort = new AbortController()
+    let stall = setTimeout(() => abort.abort(), STALL_MS)
+    const alive = new Transform({
+      transform(chunk, _enc, done) {
+        clearTimeout(stall)
+        stall = setTimeout(() => abort.abort(), STALL_MS)
+        done(null, chunk)
+      }
+    })
     const file = join(work, asset.name)
-    await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), createWriteStream(file))
+    try {
+      const res = await fetch(asset.url, {
+        headers: { ...(await this.headers()), Accept: 'application/octet-stream' },
+        signal: abort.signal
+      })
+      if (!res.ok || !res.body) throw new Error(`download ${asset.name}: HTTP ${res.status}`)
+      await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), alive, createWriteStream(file), {
+        signal: abort.signal
+      })
+    } catch (e) {
+      if (abort.signal.aborted) throw new Error(`download ${asset.name}: nothing came for ${STALL_MS / 1000} s`)
+      throw e
+    } finally {
+      clearTimeout(stall)
+    }
     if (sums) {
       const want = sums.get(asset.name)
       if (!want) throw new Error(`SHA256SUMS doesn't list ${asset.name}`)
@@ -315,8 +419,9 @@ export class Updater {
   }
 }
 
+// Only Grove's own variable: a GITHUB_TOKEN set for other tools isn't sent.
 async function githubToken(): Promise<string | undefined> {
-  return process.env.GROVE_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN
+  return process.env.GROVE_GITHUB_TOKEN
 }
 
 function readVersion(dir: string): string {

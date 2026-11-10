@@ -49,6 +49,18 @@ const pins = JSON.parse(readFileSync(join(root, 'packaging/pins.json'), 'utf8'))
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
 const cache = join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'grove-bundle')
 const run = (cmd, a, opts = {}) => execFileSync(cmd, a, { stdio: 'inherit', ...opts })
+// Runs `fn` up to three times, five seconds apart.
+function retry(fn) {
+  for (let i = 1; ; i++) {
+    try {
+      return fn()
+    } catch (e) {
+      if (i === 3) throw e
+      console.log(`failed (${e.message}); trying again`)
+      execFileSync('sleep', ['5'])
+    }
+  }
+}
 
 async function fetchPinned(what) {
   const { url, sha256 } = pins[what][platform]
@@ -75,7 +87,23 @@ run(process.execPath, [join(root, 'build.mjs')])
 const stage = join(out, `.stage-${platform}`)
 rmSync(stage, { recursive: true, force: true })
 mkdirSync(stage, { recursive: true })
-const meta = { version, chromium: pins.chromium.version, node: pins.node.version }
+// Fingerprints of what only a whole bundle carries, by platform family: the
+// start script and the Chromium patches. The updater makes a release whose
+// fingerprint differs from the installed bundle's a full update, so these
+// reach installed copies (a UI update only replaces the app).
+const PACKAGING = {
+  linux: ['packaging/linux/grove', 'scripts/webium-pak.mjs'],
+  macos: ['packaging/macos/Grove', 'scripts/webium-pak.mjs'],
+  windows: ['packaging/windows/main.go', 'packaging/windows/go.mod', 'packaging/windows/grove.cmd', 'packaging/windows/uninstall.ps1', 'scripts/webium-pak.mjs']
+}
+const packaging = Object.fromEntries(
+  Object.entries(PACKAGING).map(([family, files]) => {
+    const hash = createHash('sha256')
+    for (const f of files) hash.update(f).update('\0').update(readFileSync(join(root, f))).update('\0')
+    return [family, hash.digest('hex').slice(0, 16)]
+  })
+)
+const meta = { version, chromium: pins.chromium.version, node: pins.node.version, packaging }
 const bundleInfo = JSON.stringify({ ...meta, platform }, null, 1) + '\n'
 
 function copyApp(to) {
@@ -161,7 +189,7 @@ if (windows) {
   // Grove.app, so the Dock shows Grove.
   const mount = join(stage, 'mnt')
   mkdirSync(mount)
-  run('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, chromium])
+  retry(() => run('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, chromium]))
   try {
     run('ditto', [join(mount, 'Chromium.app'), join(stage, 'Grove.app')])
   } finally {
@@ -207,7 +235,8 @@ if (mac) {
   run('ditto', [join(stage, 'Grove.app'), join(dmgRoot, 'Grove.app')])
   symlinkSync('/Applications', join(dmgRoot, 'Applications'))
   const dmg = join(out, `Grove-${version}-${platform}.dmg`)
-  run('hdiutil', ['create', '-volname', 'Grove', '-srcfolder', dmgRoot, '-ov', '-format', 'ULFO', dmg])
+  // hdiutil fails now and then on CI runners ("Resource busy"): try again.
+  retry(() => run('hdiutil', ['create', '-volname', 'Grove', '-srcfolder', dmgRoot, '-ov', '-format', 'ULFO', dmg]))
 }
 writeFileSync(join(out, `grove-${version}.json`), JSON.stringify(meta, null, 1) + '\n')
 rmSync(stage, { recursive: true, force: true })
