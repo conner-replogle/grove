@@ -38,6 +38,9 @@ if [ "$(node -e "
   exit 1
 fi
 gh auth status >/dev/null
+# Named on every gh call: without a default repository set, gh may answer
+# for none.
+repo="$(git remote get-url origin | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
 branch="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$branch" != master ]; then
   echo "releases come from master (this is $branch)" >&2
@@ -49,7 +52,7 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/master)" ] &&
   echo "master and origin/master have gone different ways: pull first" >&2
   exit 1
 fi
-if ! gh secret list | grep -q '^GROVE_RELEASE_KEY\b'; then
+if ! gh secret list -R "$repo" | grep -q '^GROVE_RELEASE_KEY\b'; then
   echo "the GROVE_RELEASE_KEY secret isn't set: the release couldn't be signed (see docs/releasing.md)" >&2
   exit 1
 fi
@@ -72,7 +75,7 @@ echo "pushed $tag; the Release workflow builds, tests and publishes it"
 # The tag's run (it can take a few seconds to show up).
 run=""
 for _ in $(seq 30); do
-  run="$(gh run list --workflow release.yml --branch "$tag" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)"
+  run="$(gh run list -R "$repo" --workflow release.yml --branch "$tag" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)"
   [ -n "$run" ] && break
   sleep 2
 done
@@ -80,9 +83,9 @@ if [ -z "$run" ]; then
   echo "couldn't find the Release run; see: gh run list --workflow release.yml" >&2
   exit 1
 fi
-if gh run watch "$run" --exit-status; then
-  echo "released $tag: $(gh release view "$tag" --json url -q .url)"
+if gh run watch -R "$repo" "$run" --exit-status; then
+  echo "released $tag: $(gh release view -R "$repo" "$tag" --json url -q .url)"
 else
-  echo "the Release run failed; nothing was published. Fix it, then: gh run rerun $run --failed" >&2
+  echo "the Release run failed; nothing was published. Fix it, then: gh run rerun -R $repo $run --failed" >&2
   exit 1
 fi
