@@ -6,10 +6,23 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Model } from '../../shared/types.ts'
-import { SYNC_PROTOCOL, type ClientMessage, type ServerMessage } from '../../shared/sync-protocol.ts'
+import { MAX_BLOB, SYNC_PROTOCOL, type ClientMessage, type ServerMessage } from '../../shared/sync-protocol.ts'
 import { deriveKeys, seal, unseal, type SyncKeys } from './crypto.ts'
 import { Clock, newDeviceId, type Stamp } from './hlc.ts'
-import { ALL, adopt, commit, materialize, merge, META, parseRecords, serializeRecords, type Records, type Scope, type SyncRecord } from './records.ts'
+import {
+  ALL,
+  adopt,
+  commit,
+  gcTombstones,
+  materialize,
+  merge,
+  META,
+  parseRecords,
+  serializeRecords,
+  type Records,
+  type Scope,
+  type SyncRecord
+} from './records.ts'
 
 export interface SyncConfig {
   url: string
@@ -55,9 +68,16 @@ export interface SavedSyncState {
 
 const OPEN = 1
 const COMMIT_DELAY_MS = 1000
+// However often the model changes (a page's title ticking), a commit
+// happens at least this often.
+const COMMIT_MAX_WAIT_MS = 10_000
 const SAVE_DELAY_MS = 500
+// A push holds at most this many records, and this much of them (JSON
+// characters): sealed and base64'd, well under the server's MAX_BLOB.
 const BATCH = 500
-// Log length past which a device replaces it with a snapshot.
+const BATCH_CHARS = 512 * 1024
+// Log length past which a device replaces it with a snapshot: on connect,
+// and as it grows while connected.
 const COMPACT_AT = 200
 
 export function socketUrl(base: string, account: string): string {
@@ -165,6 +185,12 @@ export class SyncClient {
   private readonly activeElsewhere = new Map<string, { entryId: string; stamp: Stamp }>()
   private stopped = false
   private fatal?: string
+  // How many changes the server's log holds, as far as this device knows
+  // (from ready and acks; counted up between them).
+  private backlog = 0
+  // The server said the account is full: compact before pushing again.
+  private full = false
+  private firstChangeAt?: number
   private retryMs = 1000
   private queue: Promise<void> = Promise.resolve()
   private commitTimer?: ReturnType<typeof setTimeout>
@@ -197,6 +223,8 @@ export class SyncClient {
     this.joined = saved?.joined ?? false
     this.lastSync = saved?.lastSync
     this.pending = new Set(saved?.pending ?? [])
+    const dropped = gcTombstones(this.records)
+    if (dropped) this.log(`sync: forgot ${dropped} record(s) removed over a month ago`)
     this.launchStamp = this.records.get(META)?.f.lastWorkspace?.[1]
   }
 
@@ -239,10 +267,14 @@ export class SyncClient {
   localChanged(): void {
     if (!this.joined) return
     clearTimeout(this.commitTimer)
+    const now = Date.now()
+    this.firstChangeAt ??= now
+    const wait = Math.max(0, Math.min(this.commitDelayMs, this.firstChangeAt + COMMIT_MAX_WAIT_MS - now))
     this.commitTimer = setTimeout(() => {
+      this.firstChangeAt = undefined
       this.commitLocal()
       void this.push()
-    }, this.commitDelayMs)
+    }, wait)
   }
 
   // Synchronous: for quitting. What wasn't pushed goes next time.
@@ -334,6 +366,9 @@ export class SyncClient {
         }
         this.commitLocal()
         this.saveSoon()
+        this.backlog = msg.backlog
+        // A full account makes room before anything else goes.
+        if (this.full || this.backlog > COMPACT_AT) await this.compact()
         if (!this.resumed) {
           this.resumed = true
           const e = this.elsewhere
@@ -342,20 +377,53 @@ export class SyncClient {
           }
         }
         await this.push()
-        if (msg.backlog > COMPACT_AT) await this.compact()
         return
       }
       case 'ack':
         this.inflight.delete(msg.id)
         this.cursor = Math.max(this.cursor, msg.seq)
         this.lastSync = Date.now()
+        this.backlog = msg.backlog ?? this.backlog + 1
         this.saveSoon()
         this.onStatus()
+        if (this.backlog > COMPACT_AT) await this.compact()
         return
       case 'error':
-        this.log('sync: the server says:', msg.message)
-        if (/token|account/i.test(msg.message)) this.fatal = msg.message
-        return
+        return this.serverError(msg)
+    }
+  }
+
+  // What the server turned down. Servers deployed before November 2026
+  // give no code and close the connection after every error: read the
+  // message.
+  private async serverError(msg: Extract<ServerMessage, { t: 'error' }>): Promise<void> {
+    this.log('sync: the server says:', msg.message)
+    const code = msg.code ?? (/full/i.test(msg.message) ? 'full' : /token|invite|account/i.test(msg.message) ? 'auth' : /blob/i.test(msg.message) ? 'too_big' : 'protocol')
+    if (code === 'auth') {
+      this.fatal = msg.message
+      return
+    }
+    if (code === 'full') {
+      // Its batch goes again once compacting made room (now, or on
+      // reconnect from an older server, which closes the connection).
+      this.full = true
+      const ids = msg.id === undefined ? undefined : this.inflight.get(msg.id)
+      if (ids) {
+        this.inflight.delete(msg.id!)
+        ids.forEach((id) => this.pending.add(id))
+      }
+      if (this.ready) {
+        await this.compact()
+        await this.push()
+      }
+      return
+    }
+    if (code === 'too_big' && msg.id !== undefined) {
+      // (push() keeps batches under the limit; this is a server with a
+      // smaller one.) Those records wait for the next change.
+      const ids = this.inflight.get(msg.id) ?? []
+      this.inflight.delete(msg.id)
+      this.log(`sync: the server turned down ${ids.length} record(s) as too big`)
     }
   }
 
@@ -373,7 +441,10 @@ export class SyncClient {
     // Local changes are recorded first, so they merge with a fair stamp
     // rather than being overwritten by the model built from the records.
     if (this.joined) this.commitLocal()
-    for (const rec of incoming.values()) for (const [, stamp] of Object.values(rec.f)) this.clock.observe(stamp)
+    let ahead = false
+    for (const rec of incoming.values()) for (const [, stamp] of Object.values(rec.f)) ahead = this.clock.observe(stamp) || ahead
+    if (ahead) this.log(`sync: change ${seq} comes from a device whose clock is over 10 minutes ahead of this one's`)
+    if (this.ready) this.backlog++
     this.noteElsewhere(incoming)
     if (this.joined && !this.ready) {
       const caught = (this.catchUp ??= { records: new Map(), seq: this.cursor })
@@ -421,13 +492,36 @@ export class SyncClient {
   }
 
   private async push(): Promise<void> {
-    while (this.ready && this.pending.size && this.socket?.readyState === OPEN) {
-      const ids = [...this.pending].slice(0, BATCH)
-      ids.forEach((id) => this.pending.delete(id))
+    // Halved whenever a batch seals too big for the server.
+    let limit = BATCH_CHARS
+    while (this.ready && !this.full && this.pending.size && this.socket?.readyState === OPEN) {
+      // As many as fit in a batch, by size.
+      const ids: string[] = []
+      let chars = 0
+      for (const rid of this.pending) {
+        const size = JSON.stringify(this.records.get(rid) ?? null).length + rid.length
+        if (ids.length && (ids.length >= BATCH || chars + size > limit)) break
+        ids.push(rid)
+        chars += size
+      }
+      ids.forEach((rid) => this.pending.delete(rid))
       const id = this.nextBatch++
       this.inflight.set(id, ids)
       const blob = await seal(this.keys!, JSON.stringify({ r: serializeRecords(this.records, ids) }))
       if (!this.inflight.has(id)) return // the connection dropped meanwhile
+      if (blob.length > MAX_BLOB) {
+        this.inflight.delete(id)
+        if (ids.length > 1) {
+          ids.forEach((rid) => this.pending.add(rid))
+          limit = Math.floor(chars / 2)
+        } else {
+          // One record too big for the server however it's batched (titles
+          // and addresses are capped, so this shouldn't happen): it stays
+          // here rather than failing the push over and over.
+          this.log(`sync: record ${ids[0]} is too big to sync; it stays on this device`)
+        }
+        continue
+      }
       if (!this.send({ t: 'push', id, blob })) return
     }
   }
@@ -438,10 +532,21 @@ export class SyncClient {
     this.onStatus()
   }
 
+  // Replaces the server's log up to here with this device's records. (A
+  // snapshot too big for the server isn't sent, and the log stays: it's
+  // tried again after another COMPACT_AT changes.)
   private async compact(): Promise<void> {
     const seq = this.cursor
+    const dropped = gcTombstones(this.records)
+    if (dropped) this.saveSoon()
     const blob = await seal(this.keys!, JSON.stringify({ r: serializeRecords(this.records) }))
-    this.send({ t: 'compact', seq, blob })
+    this.backlog = 0
+    if (blob.length > MAX_BLOB) {
+      this.log(`sync: a snapshot would be ${(blob.length / 1048576).toFixed(1)} MiB, over the server's limit; not compacting`)
+      if (this.full) this.fatal = 'this account is full on the server, and too big to compact'
+      return
+    }
+    if (seq > 0 && this.send({ t: 'compact', seq, blob })) this.full = false
   }
 
   // ---- Saving ----

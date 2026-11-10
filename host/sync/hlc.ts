@@ -5,6 +5,11 @@ export type Stamp = string
 
 const WALL = 10
 const COUNTER = 5
+const MAX_COUNTER = 36 ** COUNTER - 1
+// How far ahead of this device's clock another device's stamp may pull it.
+// A device whose clock is further ahead still merges (its stamps are what
+// they are), but doesn't drag every other device's clock along with it.
+export const MAX_SKEW_MS = 10 * 60_000
 
 export const newDeviceId = (): string =>
   Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => (b % 36).toString(36)).join('')
@@ -19,6 +24,9 @@ function parse(s: Stamp): { wall: number; counter: number } | undefined {
 }
 
 export const isStamp = (s: unknown): s is Stamp => typeof s === 'string' && parse(s) !== undefined
+
+// When a stamp was made, by its maker's clock (ms), or 0 if it isn't one.
+export const stampTime = (s: Stamp): number => parse(s)?.wall ?? 0
 
 export class Clock {
   private wall = 0
@@ -38,22 +46,30 @@ export class Clock {
     if (t > this.wall) {
       this.wall = t
       this.counter = 0
-    } else {
+    } else if (this.counter < MAX_COUNTER) {
       this.counter++
+    } else {
+      // The counter's digits are used up: the next millisecond.
+      this.wall++
+      this.counter = 0
     }
     return format(this.wall, this.counter, this.device)
   }
 
-  // Moves the clock past a stamp from another device.
-  observe(s: Stamp): void {
+  // Moves the clock past a stamp from another device, unless that stamp
+  // is from further in the future than MAX_SKEW_MS (a device with its clock
+  // wrong). Returns whether it was that far ahead.
+  observe(s: Stamp): boolean {
     const p = parse(s)
-    if (!p) return
+    if (!p) return false
+    if (p.wall > this.now() + MAX_SKEW_MS) return true
     if (p.wall > this.wall) {
       this.wall = p.wall
       this.counter = p.counter
     } else if (p.wall === this.wall && p.counter > this.counter) {
       this.counter = p.counter
     }
+    return false
   }
 
   get last(): Stamp {

@@ -31,5 +31,17 @@ export type ServerMessage =
   | { t: 'change'; seq: number; blob: string }
   // Caught up: `seq` is the latest change, `backlog` how many the log holds.
   | { t: 'ready'; seq: number; backlog: number }
-  | { t: 'ack'; id: number; seq: number }
-  | { t: 'error'; message: string }
+  // `backlog`: how many changes the log holds now (servers deployed
+  // before November 2026 leave it out).
+  | { t: 'ack'; id: number; seq: number; backlog?: number }
+  // `code` says what went wrong, for devices to act on. (Servers deployed
+  // before November 2026 send only the message, and close the connection
+  // after every error.)
+  //   auth       the token or invite is wrong: the connection closes
+  //   full       the account has no room for that push (`id`): compact,
+  //              then push again
+  //   too_big    that push (`id`) is bigger than MAX_BLOB
+  //   protocol   anything else: the connection closes
+  | { t: 'error'; message: string; code?: SyncErrorCode; id?: number }
+
+export type SyncErrorCode = 'auth' | 'full' | 'too_big' | 'protocol'

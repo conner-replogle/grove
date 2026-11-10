@@ -8,9 +8,9 @@ import { MAX_ACCOUNT_BYTES, MAX_BLOB } from '../shared/sync-protocol.ts'
 import * as M from '../host/model.ts'
 import { SyncClient } from '../host/sync/client.ts'
 import { deriveKeys, newSecret, seal, unseal } from '../host/sync/crypto.ts'
-import { Clock } from '../host/sync/hlc.ts'
+import { Clock, MAX_SKEW_MS } from '../host/sync/hlc.ts'
 import { assignKeys, keyBetween } from '../host/sync/order.ts'
-import { adopt, commit, materialize, merge, parseRecords, serializeRecords, type Records } from '../host/sync/records.ts'
+import { adopt, commit, gcTombstones, materialize, MAX_TITLE, MAX_URL, merge, parseRecords, serializeRecords, TOMBSTONE_DAYS, type Records } from '../host/sync/records.ts'
 import type { Model } from '../shared/types.ts'
 
 // A model with workspaces of tabs; a leading '*' pins one.
@@ -157,6 +157,61 @@ describe('records', () => {
   })
 })
 
+describe('keeping sync small', () => {
+  it('empties what a removed tab held, and forgets it after a month', () => {
+    const base = model({ Home: ['mail', 'secret'] })
+    const records: Records = new Map()
+    commit(records, base, clock('a'))
+    const gone = base.workspaces[0].entries[1].id
+    commit(records, M.withWorkspace(base, base.workspaces[0].id, (w) => M.closeEntry(w, gone)), clock('a'))
+    const rec = records.get(gone)!
+    expect(rec.f.alive[0]).toBe(false)
+    expect(rec.f.url[0]).toBeNull()
+    expect(rec.f.title[0]).toBeNull()
+    // Every field emptied with the removal's own stamp.
+    expect(rec.f.url[1]).toBe(rec.f.alive[1])
+    // It stays (for devices that haven't heard) until a month has passed.
+    const removedAt = parseInt(rec.f.alive[1].split('-')[0], 36)
+    expect(gcTombstones(records, removedAt + 86_400_000)).toBe(0)
+    expect(gcTombstones(records, removedAt + (TOMBSTONE_DAYS + 1) * 86_400_000)).toBe(1)
+    expect(records.has(gone)).toBe(false)
+    // A device that had it open still has it, unaffected.
+    const back = materialize(base, copy(records))
+    expect(look(back).workspaces[0].tabs).toEqual(['mail', 'secret'])
+  })
+
+  it("doesn't sync when a tab was last shown, cuts long titles, and keeps huge addresses here", () => {
+    let m = model({ Home: ['mail'] })
+    const records: Records = new Map()
+    commit(records, m, clock('a'))
+    const id = m.workspaces[0].entries[0].id
+    m = M.editEntry(m, id, (e) => ({ ...e, lastActive: e.lastActive + 60_000 }))
+    expect(commit(records, m, clock('a')).size).toBe(0)
+    m = M.editEntry(m, id, (e) => ({ ...e, title: 'x'.repeat(5000) }))
+    commit(records, m, clock('a'))
+    expect((records.get(id)!.f.title[0] as string).length).toBe(MAX_TITLE)
+    m = M.withWorkspace(m, m.workspaces[0].id, (w) => M.addEntry(w, { url: `data:text/html,${'x'.repeat(MAX_URL)}`, title: 'big' })[0])
+    const big = m.workspaces[0].entries.find((e) => e.title === 'big')!.id
+    commit(records, m, clock('a'))
+    expect(records.has(big)).toBe(false)
+  })
+
+  it("doesn't follow a clock that's far ahead", () => {
+    let now = 1_000_000_000
+    const c = new Clock('a', undefined, () => now)
+    const far = new Clock('b', undefined, () => now + 2 * MAX_SKEW_MS).tick()
+    expect(c.observe(far)).toBe(true)
+    expect(c.tick() < far).toBe(true)
+    const near = new Clock('b', undefined, () => now + 60_000).tick()
+    expect(c.observe(near)).toBe(false)
+    expect(c.tick() > near).toBe(true)
+    // A full counter moves on to the next millisecond.
+    const stamps = Array.from({ length: 5 }, () => c.tick())
+    expect([...stamps].sort()).toEqual(stamps)
+    now += 0
+  })
+})
+
 describe('syncing only pins', () => {
   const PINS = { unpinnedTabs: false }
   const setup = () => {
@@ -276,6 +331,7 @@ class Device {
   model: Model
   readonly client: SyncClient
   socket?: FakeSocket
+  readonly logs: string[] = []
 
   constructor(name: string, start: Model, secret: string, server: Server, dir: string) {
     this.model = start
@@ -291,7 +347,8 @@ class Device {
         resume: async () => {}
       },
       connect: () => (this.socket = new FakeSocket(server)),
-      commitDelayMs: 0
+      commitDelayMs: 0,
+      log: (...a) => this.logs.push(a.map(String).join(' '))
     })
   }
 
@@ -344,6 +401,113 @@ describe('sync between devices', () => {
     await settle()
     expect(look(phone.model)).toEqual(look(laptop.model))
     for (const d of [laptop, mac, phone]) d.client.stop()
+  })
+
+  it('sends many big changes in batches the server takes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grove-sync-'))
+    const store = new MemoryStore()
+    const server: Server = { room: new Room(store), peers: new Set(), queue: Promise.resolve() }
+    const secret = newSecret()
+    // ~2.5 MB of tabs: more than one blob can carry.
+    let start = M.emptyModel()
+    start = M.withWorkspace(start, start.workspaces[0].id, (w) => {
+      for (let i = 0; i < 2500; i++) w = M.addEntry(w, { url: `https://t${i}.test/`, title: `${i} ${'y'.repeat(900)}` })[0]
+      return w
+    })
+    const laptop = new Device('laptop', start, secret, server, dir)
+    await laptop.client.start()
+    await new Promise((r) => setTimeout(r, 1500))
+    const sent = store.since(0)
+    expect(sent.length).toBeGreaterThan(1)
+    expect(Math.max(...sent.map((e) => e.blob.length))).toBeLessThanOrEqual(MAX_BLOB)
+    const mac = new Device('mac', M.emptyModel(), secret, server, dir)
+    await mac.client.start()
+    await new Promise((r) => setTimeout(r, 1500))
+    expect(mac.model.workspaces[0].entries).toHaveLength(2500)
+    expect(laptop.client.status().error).toBeUndefined()
+    for (const d of [laptop, mac]) d.client.stop()
+  })
+
+  it('compacts while connected once the log grows, and makes room when the account is full', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grove-sync-'))
+    const store = new MemoryStore()
+    const server: Server = {
+      room: new Room(store, { maxAccountBytes: 120_000 }),
+      peers: new Set(),
+      queue: Promise.resolve()
+    }
+    const secret = newSecret()
+    const laptop = new Device('laptop', model({ Home: ['a'] }), secret, server, dir)
+    await laptop.client.start()
+    await settle()
+    const id = laptop.model.workspaces[0].entries[0].id
+    // Each rename is a change of its own; the account fills before 200.
+    for (let i = 0; i < 260; i++) {
+      laptop.edit((m) => M.editEntry(m, id, (e) => ({ ...e, title: `a ${i} ${'z'.repeat(300)}` })))
+      await new Promise((r) => setTimeout(r, 3))
+    }
+    await new Promise((r) => setTimeout(r, 500))
+    expect(Number(store.get('snapshotSeq') ?? 0)).toBeGreaterThan(0)
+    expect(laptop.logs.some((l) => l.includes('account is full'))).toBe(true)
+    expect(laptop.client.status().error).toBeUndefined()
+    expect(laptop.client.status().pending).toBe(0)
+    // What the last rename said got there.
+    const phone = new Device('phone', M.emptyModel(), secret, server, dir)
+    await phone.client.start()
+    await settle()
+    expect(phone.model.workspaces[0].entries[0].title).toMatch(/^a 259 /)
+    for (const d of [laptop, phone]) d.client.stop()
+  })
+
+  it('gets past a full account on a server from before error codes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grove-sync-'))
+    const store = new MemoryStore()
+    // The server as deployed before November 2026: no codes or backlog, and
+    // every error closes the connection.
+    const room = new Room(store, { maxAccountBytes: 120_000 })
+    const old = {
+      async message(peer: Peer, data: string, peers: Iterable<Peer>) {
+        const wrapped: Peer = {
+          get authed() {
+            return peer.authed
+          },
+          set authed(v) {
+            peer.authed = v
+          },
+          close: (c, r) => peer.close(c, r),
+          send: (m) => {
+            const msg = JSON.parse(m)
+            delete msg.code
+            delete msg.backlog
+            if (msg.t === 'error') delete msg.id
+            peer.send(JSON.stringify(msg))
+            // (After the message: a WebSocket delivers what was sent first.)
+            if (msg.t === 'error') setTimeout(() => peer.close(1008, msg.message), 5)
+          }
+        }
+        return room.message(wrapped, data, peers)
+      }
+    } as unknown as Room
+    const server: Server = { room: old, peers: new Set(), queue: Promise.resolve() }
+    const secret = newSecret()
+    const laptop = new Device('laptop', model({ Home: ['a'] }), secret, server, dir)
+    await laptop.client.start()
+    await settle()
+    const id = laptop.model.workspaces[0].entries[0].id
+    for (let i = 0; i < 260; i++) {
+      laptop.edit((m) => M.editEntry(m, id, (e) => ({ ...e, title: `a ${i} ${'z'.repeat(300)}` })))
+      await new Promise((r) => setTimeout(r, 3))
+    }
+    // Closed on "full", back after the reconnect delay, compacted, pushed.
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(laptop.logs.some((l) => l.includes('account is full'))).toBe(true)
+    expect(laptop.client.status().error).toBeUndefined()
+    expect(laptop.client.status().pending).toBe(0)
+    const phone = new Device('phone', M.emptyModel(), secret, server, dir)
+    await phone.client.start()
+    await settle()
+    expect(phone.model.workspaces[0].entries[0].title).toMatch(/^a 259 /)
+    for (const d of [laptop, phone]) d.client.stop()
   })
 
   it('keeps what other devices made while this one was offline', async () => {

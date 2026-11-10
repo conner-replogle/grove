@@ -2,14 +2,18 @@
 // every tab and folder, each workspace's active tab and the last workspace
 // used) as records of fields. Each field keeps the stamp of its last change
 // and the later stamp wins, field by field, so devices merge in any order
-// and any number of times to the same result. A record is never removed,
-// only marked not alive, so a removal wins over older edits.
+// and any number of times to the same result. A removal marks the record
+// not alive and empties its content (URL, title...) in the same change, so
+// a removal wins over older edits and what was closed doesn't linger in
+// every device's state. Records dead for TOMBSTONE_DAYS are dropped
+// (gcTombstones): a device offline that long may keep showing what others
+// removed meanwhile, but only to itself.
 // Which window shows what, and pages' own state, stay on the device.
 import { COLORS, isWorkspaceColor, type Color, type Entry, type Group, type Model, type PinnedPage, type Workspace } from '../../shared/types.ts'
 import { normalize } from '../model.ts'
 import { parseSplits } from '../split.ts'
 import type { Stamp } from './hlc.ts'
-import { isStamp } from './hlc.ts'
+import { isStamp, stampTime } from './hlc.ts'
 import { assignKeys } from './order.ts'
 
 export type Kind = 'meta' | 'workspace' | 'entry' | 'group'
@@ -51,6 +55,15 @@ const parseJson = (s: string | undefined): unknown => {
     return undefined
   }
 }
+// How long a removed record is kept, for devices that haven't heard yet.
+export const TOMBSTONE_DAYS = 30
+// What a tab's title and address may be, to sync: longer titles are cut,
+// and a tab with a longer address (a big data: URL) stays on its device.
+export const MAX_TITLE = 1000
+export const MAX_URL = 8192
+// What a removed record keeps: only these fields (the rest is emptied).
+const KEEP_WHEN_DEAD = new Set(['alive', 'parent', 'order'])
+
 // Favicons in data URLs can be big; sync only small ones.
 const syncedFavicon = (f: string | undefined): string | null =>
   f && !(f.startsWith('data:') && f.length > 2048) ? f : null
@@ -150,16 +163,19 @@ function project(model: Model, records: Records, scope: Scope): { wanted: Map<st
       parent,
       pinned: parent !== ESSENTIALS && e.pinned,
       url: e.url,
-      title: e.title,
+      title: e.title.slice(0, MAX_TITLE),
       favicon: syncedFavicon(e.favicon),
       pin: syncedPin(e.pin),
-      group: e.groupId ?? null,
-      lastActive: e.lastActive
+      group: e.groupId ?? null
+      // (Not lastActive: each device keeps when it last showed a tab. It
+      // changed with every tab switch, filling the log.)
     }
   })
+  // A tab with an address too long to sync stays on this device.
+  const fits = (e: Entry): boolean => e.url.length <= MAX_URL
   wanted.set(META, { kind: 'meta', values: { lastWorkspace: model.lastActiveWorkspaceId } })
-  const lists: string[][] = [model.workspaces.map((w) => w.id), model.essentials.map((e) => e.id)]
-  for (const e of model.essentials) wanted.set(e.id, entry(e, ESSENTIALS))
+  const lists: string[][] = [model.workspaces.map((w) => w.id), model.essentials.filter(fits).map((e) => e.id)]
+  for (const e of model.essentials) if (fits(e)) wanted.set(e.id, entry(e, ESSENTIALS))
   for (const ws of model.workspaces) {
     // The active tab may be one other devices don't get.
     const values: Record<string, Value> = { name: ws.name, color: ws.color, icon: ws.icon ?? null }
@@ -176,7 +192,7 @@ function project(model: Model, records: Records, scope: Scope): { wanted: Map<st
         values: { parent: ws.id, title: g.title, color: g.color, collapsed: g.collapsed, pinned: !!g.pinned }
       })
     }
-    const entries = ws.entries.filter((e) => syncs(e.id, e.pinned))
+    const entries = ws.entries.filter((e) => syncs(e.id, e.pinned) && fits(e))
     for (const e of entries) wanted.set(e.id, entry(e, ws.id))
     lists.push(entries.map((e) => e.id))
   }
@@ -212,9 +228,27 @@ export function commit(records: Records, model: Model, stamp: () => Stamp, scope
     })
   }
   for (const [id, rec] of records) {
-    if (isAlive(rec) && !wanted.has(id) && inScope(rec, scope)) set(id, rec, 'alive', false)
+    if (!isAlive(rec) || wanted.has(id) || !inScope(rec, scope)) continue
+    set(id, rec, 'alive', false)
+    // Emptied in the same change: what was closed doesn't stay readable in
+    // every device's state and snapshot. (Bringing it back sets them all.)
+    for (const field of Object.keys(rec.f)) if (!KEEP_WHEN_DEAD.has(field) && rec.f[field][0] !== null) set(id, rec, field, null)
   }
   return changed
+}
+
+// Drops records removed more than TOMBSTONE_DAYS ago (by the stamp of their
+// removal). Local only: nothing to send. Returns how many went.
+export function gcTombstones(records: Records, now = Date.now()): number {
+  const before = now - TOMBSTONE_DAYS * 86_400_000
+  let dropped = 0
+  for (const [id, rec] of records) {
+    const alive = rec.f.alive
+    if (id === META || !alive || alive[0] !== false || stampTime(alive[1]) > before) continue
+    records.delete(id)
+    dropped++
+  }
+  return dropped
 }
 
 // ---- From records to the model ----
@@ -261,7 +295,8 @@ export function materialize(model: Model, records: Records, scope: Scope = ALL):
     const local = localEntry.get(id)
     const favicon = str(r, 'favicon') ?? (local?.favicon && !syncedFavicon(local.favicon) ? local.favicon : undefined)
     const group = parent === ESSENTIALS ? undefined : str(r, 'group')
-    const lastActive = r.f.lastActive?.[0]
+    // This device's own, if it has one (older versions synced it).
+    const lastActive = local?.lastActive ?? r.f.lastActive?.[0]
     const e: Entry = {
       id,
       url: str(r, 'url') ?? '',
@@ -269,7 +304,7 @@ export function materialize(model: Model, records: Records, scope: Scope = ALL):
       pinned: parent !== ESSENTIALS && r.f.pinned?.[0] === true,
       history: local?.history ?? [],
       historyIndex: local?.historyIndex ?? -1,
-      lastActive: typeof lastActive === 'number' ? lastActive : (local?.lastActive ?? 0)
+      lastActive: typeof lastActive === 'number' ? lastActive : 0
     }
     if (favicon) e.favicon = favicon
     const pin = parsePin(str(r, 'pin'), local?.pin)
