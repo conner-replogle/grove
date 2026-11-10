@@ -11,6 +11,9 @@ const KEY = 'grove.sidebarHidden'
 // How long the sidebar stays after the pointer leaves it (Zen's
 // zen.view.compact.sidebar-keep-hover.duration is similar).
 const KEEP_MS = 300
+// How long the pointer must rest on the window's left edge to bring the
+// sidebar out.
+const DWELL_MS = 150
 
 const listeners = new Set<() => void>()
 
@@ -70,28 +73,58 @@ export function compactMode(app: HTMLElement): HTMLElement {
   })
   apply()
 
-  edge.addEventListener('pointerenter', () => {
-    if (app.classList.contains('grove-compact')) peek(true)
-  })
+  // Opening needs the pointer to rest on the edge for a moment, so passing
+  // over it on the way to something else (the page's own left side, another
+  // window) doesn't throw the sidebar over the page. Zen's hover-to-show
+  // waits the same way.
+  let enter: ReturnType<typeof setTimeout> | undefined
+  const cancelEnter = (): void => {
+    clearTimeout(enter)
+    enter = undefined
+  }
+  // Where the pointer is, from the UI's own pointer events rather than
+  // :hover, which goes stale once the pointer is over the page (the page's
+  // <embed> takes the events, so the UI document never updates its hover).
+  let inside = false
   const sidebar = (): HTMLElement | null | undefined => app.shadowRoot?.querySelector<HTMLElement>('#topContainer')
+  const isOurs = (path: EventTarget[]): boolean => {
+    const box = sidebar()
+    return path.includes(edge) || (!!box && path.includes(box))
+  }
   // Goes once the pointer is off it, but not while its URL bar is open.
   const hideLater = (): void => {
     if (!app.classList.contains('grove-peek')) return
     clearTimeout(leave)
     leave = setTimeout(() => {
-      const box = sidebar()
-      if (box?.matches(':hover, :has(#address:focus-within)')) return
+      leave = undefined
+      if (inside || sidebar()?.matches(':has(#address:focus-within)')) return
       peek(false)
     }, KEEP_MS)
   }
-  app.shadowRoot?.addEventListener('pointerover', (e) => {
-    if (leave && sidebar()?.contains(e.target as Node)) peek(true)
-  })
-  app.shadowRoot?.addEventListener('pointerout', (e) => {
-    const box = sidebar()
-    const to = (e as PointerEvent).relatedTarget as Node | null
-    if (!box || (to && (box.contains(to) || to === edge))) return
-    if (box.contains(e.target as Node) || e.target === edge) hideLater()
+  const pointerAt = (e: Event, onEdge: boolean): void => {
+    inside = isOurs(e.composedPath())
+    if (!inside) {
+      cancelEnter()
+      hideLater()
+    } else if (app.classList.contains('grove-peek')) {
+      clearTimeout(leave)
+      leave = undefined
+    } else if (onEdge && app.classList.contains('grove-compact') && !enter) {
+      enter = setTimeout(() => {
+        enter = undefined
+        if (inside && app.classList.contains('grove-compact')) peek(true)
+      }, DWELL_MS)
+    }
+  }
+  app.shadowRoot?.addEventListener('pointerover', (e) => pointerAt(e, e.composedPath().includes(edge)))
+  // pointerover alone misses a pointer that enters the edge from outside
+  // the window, so moves on the edge start the wait too (once).
+  edge.addEventListener('pointermove', (e) => pointerAt(e, true))
+  // Out of the window altogether: no pointerover follows.
+  document.documentElement.addEventListener('pointerleave', () => {
+    inside = false
+    cancelEnter()
+    hideLater()
   })
   app.shadowRoot?.addEventListener('focusout', hideLater)
   return edge
