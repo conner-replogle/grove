@@ -215,7 +215,12 @@ function merge(
   const chrome = result.matches.map((m, i) => ({ m, src: { chrome: i } as Source }))
 
   const autofill = latest.list.find((s) => s.autofill && s.text.startsWith(bare))
-  const others = latest.list.filter((s) => s !== autofill)
+  // Filled in, Grove's page leads (and replaces Chrome's row for it).
+  // Otherwise it's one more row after Chrome's default, and Chrome keeps
+  // its own row for the same page: after a paste of an address, that row
+  // is the default, and dropping it left the search for the address first.
+  const filling = mayFill ? autofill : undefined
+  const others = autofill && !filling ? [autofill, ...latest.list.filter((s) => s !== autofill)] : latest.list.filter((s) => s !== filling)
   // Chrome may have the same page under the other scheme (http://, then
   // https:// after its redirect): one row for an address.
   const chromeAddresses = new Set(result.matches.map((m) => address(m.destinationUrl)))
@@ -224,10 +229,10 @@ function merge(
     .map((s) => ({ m: toMatch(s, typed, bare, false, template), src: { grove: s } as Source }))
 
   let rows: { m: Match; src: Source }[]
-  if (autofill) {
-    const fill = { m: toMatch(autofill, typed, bare, mayFill, template), src: { grove: autofill } as Source }
-    const rest = chrome.filter((r) => address(r.m.destinationUrl) !== address(autofill.url))
-    rows = mayFill ? [fill, ...groveRows, ...rest] : [...rest.slice(0, 1), fill, ...groveRows, ...rest.slice(1)]
+  if (filling) {
+    const fill = { m: toMatch(filling, typed, bare, true, template), src: { grove: filling } as Source }
+    const rest = chrome.filter((r) => address(r.m.destinationUrl) !== address(filling.url))
+    rows = [fill, ...groveRows, ...rest]
   } else {
     rows = [...chrome.slice(0, 1), ...groveRows, ...chrome.slice(1)]
   }
