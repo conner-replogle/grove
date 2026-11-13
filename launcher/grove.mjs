@@ -290,6 +290,12 @@ function mergeFlags(flags) {
 }
 
 const chromeArgs = mergeFlags([
+    // ungoogled-chromium (the bundled browser) defaults WebRTC to public
+    // interfaces only, which leaves a LAN peer with no STUN server (a
+    // camera, a local stream) no ICE candidates at all. Chrome's default
+    // still hides local addresses behind mDNS names. Before the user's
+    // flags: the last of a repeated switch wins, so theirs can override.
+    '--webrtc-ip-handling-policy=default',
     ...userFlags(),
     `--user-data-dir=${PROFILE}`,
     `--enable-features=${FEATURES}`,
